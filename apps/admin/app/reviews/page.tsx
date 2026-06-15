@@ -394,7 +394,7 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
                     { key: "question", label: "Tampilan soal", index: 2 },
                     { key: "author", label: "Penulis", index: 3 },
                     { key: "status", label: "Status", index: 4 },
-                    { key: "review", label: "Perbaikan", index: 5 },
+                    { key: "action", label: "Aksi", index: 5 },
                   ]}
                 >
                   <table className="data-table">
@@ -404,7 +404,7 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
                       <th>Tampilan soal</th>
                       <th>Penulis</th>
                       <th>Status</th>
-                      <th>Perbaikan</th>
+                      <th>Aksi</th>
                     </tr>
                   </thead>
                   <tbody>
