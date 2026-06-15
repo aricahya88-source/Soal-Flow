@@ -42,6 +42,12 @@ export function ReviewQuestionForm({
       {optionLabels.map((label) => <input key={label} type="hidden" name={`option${label}`} value={options[label]} />)}
 
       <RichTextEditor label="Perbaikan soal" value={stem} onChange={setStem} minHeight={170} required />
+      <div className="button-row-wrap">
+        <button className="primary-button" type="submit" name="decision" value="APPROVE"><CheckCircle2 size={16} /> Setujui</button>
+        <button className="secondary-button" type="submit" name="decision" value="EDIT_AND_FORWARD"><ShieldCheck size={16} /> Simpan perbaikan</button>
+        <button className="secondary-button" type="submit" name="decision" value="REQUEST_REVISION"><RotateCcw size={16} /> Minta revisi</button>
+        <button className="danger-button" type="submit" name="decision" value="REJECT"><XCircle size={16} /> Tolak</button>
+      </div>
       <div className="option-form-grid">
         {optionLabels.map((label) => (
           <RichTextEditor key={label} label={`Jawaban ${label}`} value={options[label]} onChange={(html) => setOptions((current) => ({ ...current, [label]: html }))} minHeight={80} required />
@@ -53,12 +59,6 @@ export function ReviewQuestionForm({
       </div>
       <RichTextEditor label="Pembahasan / jawaban" value={explanation} onChange={setExplanation} />
       <RichTextEditor label="Catatan validator" value={validatorNotes} onChange={setValidatorNotes} minHeight={120} />
-      <div className="button-row-wrap">
-        <button className="primary-button" type="submit" name="decision" value="APPROVE"><CheckCircle2 size={16} /> Setujui</button>
-        <button className="secondary-button" type="submit" name="decision" value="EDIT_AND_FORWARD"><ShieldCheck size={16} /> Simpan perbaikan</button>
-        <button className="secondary-button" type="submit" name="decision" value="REQUEST_REVISION"><RotateCcw size={16} /> Minta revisi</button>
-        <button className="danger-button" type="submit" name="decision" value="REJECT"><XCircle size={16} /> Tolak</button>
-      </div>
     </form>
   );
 }
