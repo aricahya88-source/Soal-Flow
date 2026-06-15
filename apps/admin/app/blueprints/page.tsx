@@ -1,5 +1,6 @@
 import { AdminShell } from "@/components/admin-shell";
 import { BlueprintForm } from "@/components/blueprint-form";
+import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { ColumnToggleTable } from "@/components/column-toggle-table";
 import { PaginationControls } from "@/components/pagination-controls";
 import {
@@ -17,7 +18,7 @@ import { requireActionUser, requirePageUser } from "@/lib/auth";
 import { paginationWindow, parsePage, parsePageSize } from "@/lib/pagination";
 import { db } from "@seleksi/database";
 import { revalidatePath } from "next/cache";
-import { ChevronDown, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Pencil, Plus } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -620,12 +621,11 @@ export default async function BlueprintsPage({ searchParams }: PageProps) {
                           }}
                         />
                       </details>
-                      <form action={deleteBlueprint}>
-                        <input type="hidden" name="id" value={row.id} />
-                        <button className="danger-button" type="submit">
-                          <Trash2 size={15} /> Hapus
-                        </button>
-                      </form>
+                      <ConfirmDeleteForm
+                        action={deleteBlueprint}
+                        id={row.id}
+                        message={`Yakin ingin menghapus kisi-kisi ${row.code}? Semua slot soal, stimulus, plotting, dan riwayat review terkait akan ikut terhapus.`}
+                      />
                     </td>
                   </tr>
                 );
