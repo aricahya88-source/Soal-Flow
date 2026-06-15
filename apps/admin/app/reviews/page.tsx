@@ -10,7 +10,7 @@ import { paginationWindow, parsePage, parsePageSize } from "@/lib/pagination";
 import { db } from "@seleksi/database";
 import { ContentStatus, ValidationTaskStatus, type Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { BookOpenText, ChevronDown, Pencil, ShieldCheck } from "lucide-react";
+import { BookOpenText, CheckCircle2, ChevronDown, Pencil, RotateCcw, ShieldCheck, XCircle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -482,25 +482,71 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
                             </span>
                           </td>
                           <td>
-                            <details className="action-details question-fix-details">
-                              <summary className="secondary-button">
-                                <Pencil size={15} /> Perbaiki
-                              </summary>
-                              <p className="muted-text review-action-hint">
-                                Buka editor hanya jika konten soal perlu diperbaiki.
-                              </p>
-                              <ReviewQuestionForm
-                                action={validateQuestion}
-                                initial={{
-                                  id: row.id,
-                                  stemHtml: current?.stemHtml,
-                                  explanationHtml: current?.explanationHtml,
-                                  answerKey: current?.answerKey,
-                                  difficulty: current?.difficulty,
-                                  options: values,
-                                }}
-                              />
-                            </details>
+                            {(() => {
+                              const reviewFormId = `review-question-form-${row.id}`;
+                              return (
+                                <div className="review-action-stack">
+                                  <div className="button-row-wrap review-decision-buttons">
+                                    <button
+                                      className="primary-button"
+                                      type="submit"
+                                      form={reviewFormId}
+                                      name="decision"
+                                      value="APPROVE"
+                                    >
+                                      <CheckCircle2 size={16} /> Setujui
+                                    </button>
+                                    <button
+                                      className="secondary-button"
+                                      type="submit"
+                                      form={reviewFormId}
+                                      name="decision"
+                                      value="EDIT_AND_FORWARD"
+                                    >
+                                      <ShieldCheck size={16} /> Simpan perbaikan
+                                    </button>
+                                    <button
+                                      className="secondary-button"
+                                      type="submit"
+                                      form={reviewFormId}
+                                      name="decision"
+                                      value="REQUEST_REVISION"
+                                    >
+                                      <RotateCcw size={16} /> Minta revisi
+                                    </button>
+                                    <button
+                                      className="danger-button"
+                                      type="submit"
+                                      form={reviewFormId}
+                                      name="decision"
+                                      value="REJECT"
+                                    >
+                                      <XCircle size={16} /> Tolak
+                                    </button>
+                                  </div>
+                                  <details className="action-details question-fix-details">
+                                    <summary className="secondary-button">
+                                      <Pencil size={15} /> Perbaiki
+                                    </summary>
+                                    <p className="muted-text review-action-hint">
+                                      Buka editor hanya jika konten soal perlu diperbaiki.
+                                    </p>
+                                    <ReviewQuestionForm
+                                      action={validateQuestion}
+                                      formId={reviewFormId}
+                                      initial={{
+                                        id: row.id,
+                                        stemHtml: current?.stemHtml,
+                                        explanationHtml: current?.explanationHtml,
+                                        answerKey: current?.answerKey,
+                                        difficulty: current?.difficulty,
+                                        options: values,
+                                      }}
+                                    />
+                                  </details>
+                                </div>
+                              );
+                            })()}
                           </td>
                         </tr>
                       );
