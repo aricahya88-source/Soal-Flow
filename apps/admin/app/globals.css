@@ -553,10 +553,23 @@ details[open] > summary .details-chevron { transform: rotate(180deg); }
 .assignment-subnav a > svg { width: 34px; height: 34px; padding: 8px; border-radius: 11px; color: var(--brand); background: color-mix(in srgb, var(--brand) 10%, transparent); }
 .assignment-subnav a strong { min-width: 30px; height: 30px; display: grid; place-items: center; border-radius: 999px; background: var(--surface-muted); color: var(--text); }
 .assignment-subnav a.is-active { border-color: var(--brand); color: var(--text); background: color-mix(in srgb, var(--brand) 7%, var(--surface)); box-shadow: 0 14px 32px color-mix(in srgb, var(--brand) 14%, transparent); }
-.assignment-tab-layout { display: grid; grid-template-columns: minmax(330px,.72fr) minmax(0,1.28fr); gap: 18px; align-items: start; }
-.assignment-tab-layout > form { position: sticky; top: 92px; }
+.assignment-tab-layout { display: grid; grid-template-columns: 1fr; gap: 18px; align-items: start; }
+.assignment-tab-layout > form { position: static; }
 .compact-progress { width: 130px; max-width: 100%; height: 7px; margin-bottom: 6px; overflow: hidden; border-radius: 999px; background: var(--surface-muted); }
 .compact-progress > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand), var(--brand-strong)); }
+.assignment-picker { display: grid; gap: 10px; }
+.assignment-search-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.assignment-search-row .secondary-button { min-height: 42px; justify-content: center; }
+.assignment-selection-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: .78rem; font-weight: 850; }
+.assignment-checkbox-list { display: grid; gap: 8px; max-height: 330px; overflow: auto; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-muted); }
+.assignment-checkbox-item { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer; }
+.assignment-checkbox-item input { margin-top: 3px; accent-color: var(--brand); }
+.assignment-checkbox-item span { display: grid; gap: 3px; min-width: 0; }
+.assignment-checkbox-item strong { color: var(--text); font-size: .9rem; line-height: 1.35; }
+.assignment-checkbox-item small { color: var(--muted); font-size: .75rem; font-weight: 750; }
+.assignment-checkbox-item.is-disabled { opacity: .6; cursor: not-allowed; background: color-mix(in srgb, var(--surface-muted) 68%, var(--surface)); }
+.assignment-checkbox-item.is-disabled * { cursor: not-allowed; }
+.assignment-picker-empty { padding: 14px; text-align: center; color: var(--muted); font-weight: 750; }
 
 /* Question slots grouped by blueprint */
 .question-page-stats { display: flex; flex-wrap: wrap; gap: 8px; }
