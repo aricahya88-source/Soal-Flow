@@ -233,15 +233,82 @@ async function updateBlueprint(formData: FormData) {
 
 async function deleteBlueprint(formData: FormData) {
   "use server";
+
   await requireActionUser(["BLUEPRINT_AUTHOR", "SUPER_ADMIN"]);
+
   const id = requiredText(formData, "id");
+
   await db.$transaction(async (tx) => {
+    const blueprintVersionIds = (
+      await tx.blueprintVersion.findMany({
+        where: { blueprintId: id },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+
+    const stimulusVersionIds = (
+      await tx.stimulusVersion.findMany({
+        where: {
+          stimulus: {
+            blueprintId: id,
+          },
+        },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+
+    const questionVersionIds = (
+      await tx.questionVersion.findMany({
+        where: {
+          question: {
+            blueprintId: id,
+          },
+        },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+
+    await tx.reviewAssignment.deleteMany({
+      where: {
+        OR: [
+          { blueprintVersionId: { in: blueprintVersionIds } },
+          { stimulusVersionId: { in: stimulusVersionIds } },
+          { questionVersionId: { in: questionVersionIds } },
+        ],
+      },
+    });
+
+    await tx.question.updateMany({
+      where: { blueprintId: id },
+      data: {
+        currentVersionId: null,
+        stimulusId: null,
+      },
+    });
+
+    await tx.stimulus.updateMany({
+      where: { blueprintId: id },
+      data: {
+        currentVersionId: null,
+      },
+    });
+
     await tx.blueprint.update({
       where: { id },
-      data: { currentVersionId: null },
+      data: {
+        currentVersionId: null,
+      },
     });
-    await tx.blueprint.delete({ where: { id } });
+
+    await tx.question.deleteMany({
+      where: { blueprintId: id },
+    });
+
+    await tx.blueprint.delete({
+      where: { id },
+    });
   });
+
   revalidatePath("/blueprints");
   revalidatePath("/questions");
   revalidatePath("/assignments");
