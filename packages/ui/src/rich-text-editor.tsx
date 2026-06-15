@@ -24,9 +24,10 @@ import {
   Heading2,
   Heading3,
   Upload,
-  Sigma
+  Sigma,
+  Code2
 } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 interface RichTextEditorProps {
   label: string;
@@ -46,6 +47,7 @@ export function RichTextEditor({
   required = false
 }: RichTextEditorProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [codeMode, setCodeMode] = useState(false);
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -120,6 +122,15 @@ export function RichTextEditor({
     activeEditor.chain().focus().insertContent(text).run();
   }
 
+  function toggleCodeMode() {
+    if (!codeMode) {
+      onChange(activeEditor.getHTML());
+    } else {
+      activeEditor.commands.setContent(value || "", false);
+    }
+    setCodeMode((current) => !current);
+  }
+
   const button = (labelText: string, active: boolean, action: () => void, icon: ReactNode) => (
     <button
       type="button"
@@ -148,6 +159,7 @@ export function RichTextEditor({
           {button("Gambar dari komputer", false, () => fileInputRef.current?.click(), <Upload size={16} />)}
           {button("Gambar dari URL", false, addImageUrl, <ImageIcon size={16} />)}
           {button("LaTeX", false, addLatex, <Sigma size={16} />)}
+          {button("Code HTML", codeMode, toggleCodeMode, <Code2 size={16} />)}
           {button("Sisipkan tabel", editor.isActive("table"), () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(), <TableIcon size={16} />)}
           {button("Urungkan", false, () => editor.chain().focus().undo().run(), <Undo2 size={16} />)}
           {button("Ulangi", false, () => editor.chain().focus().redo().run(), <Redo2 size={16} />)}
@@ -162,7 +174,18 @@ export function RichTextEditor({
             event.currentTarget.value = "";
           }}
         />
-        <EditorContent editor={editor} />
+        {codeMode ? (
+          <textarea
+            className="wysiwyg-code-editor"
+            aria-label={`Kode HTML ${label}`}
+            spellCheck={false}
+            value={value}
+            style={{ minHeight }}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        ) : (
+          <EditorContent editor={editor} />
+        )}
       </div>
     </label>
   );
