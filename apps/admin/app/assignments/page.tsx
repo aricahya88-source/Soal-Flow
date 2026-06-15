@@ -7,7 +7,7 @@ import { requireActionUser, requirePageUser } from "@/lib/auth";
 import { paginationWindow, parsePage, parsePageSize } from "@/lib/pagination";
 import { db } from "@seleksi/database";
 import { revalidatePath } from "next/cache";
-import { ClipboardCheck, Pencil, ShieldCheck, Trash2 } from "lucide-react";
+import { ChevronDown, ClipboardCheck, Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -15,31 +15,52 @@ function dateInput(value?: Date | null) {
   return value ? value.toISOString().slice(0, 10) : null;
 }
 
+function selectedBlueprintIds(formData: FormData) {
+  const selectedIds = formData.getAll("blueprintIds").map((value) => String(value)).filter(Boolean);
+  const legacyId = optionalText(formData, "blueprintId");
+  const ids = Array.from(new Set(selectedIds.length ? selectedIds : legacyId ? [legacyId] : []));
+  if (!ids.length) throw new Error("Pilih minimal satu kisi-kisi.");
+  return ids;
+}
+
 async function createWritingAssignment(formData: FormData) {
   "use server";
   const user = await requireActionUser(["EXAM_ADMIN", "SUPER_ADMIN"]);
-  const blueprintId = requiredText(formData, "blueprintId");
-  const blueprint = await db.blueprint.findUnique({ where: { id: blueprintId }, include: { currentVersion: true } });
-  if (!blueprint?.currentVersion) throw new Error("Kisi-kisi belum memiliki versi aktif.");
+  const assignedToId = requiredText(formData, "assignedToId");
+  const blueprintIds = selectedBlueprintIds(formData);
   const dueAtText = optionalText(formData, "dueAt");
+  const dueAt = dueAtText ? new Date(`${dueAtText}T00:00:00`) : null;
+  const noteHtml = getHtml(formData, "note");
 
-  await db.questionWritingAssignment.upsert({
-    where: { blueprintId_assignedToId: { blueprintId, assignedToId: requiredText(formData, "assignedToId") } },
-    update: {
-      targetCount: blueprint.currentVersion.expectedQuestionCount,
-      noteHtml: getHtml(formData, "note"),
-      dueAt: dueAtText ? new Date(`${dueAtText}T00:00:00`) : null,
-      assignedById: user.id,
-      status: "ASSIGNED"
-    },
-    create: {
-      blueprintId,
-      assignedToId: requiredText(formData, "assignedToId"),
-      assignedById: user.id,
-      targetCount: blueprint.currentVersion.expectedQuestionCount,
-      noteHtml: getHtml(formData, "note"),
-      dueAt: dueAtText ? new Date(`${dueAtText}T00:00:00`) : null
+  await db.$transaction(async (tx) => {
+    const blueprints = await tx.blueprint.findMany({
+      where: { id: { in: blueprintIds } },
+      include: { currentVersion: true }
+    });
+    if (blueprints.length !== blueprintIds.length) throw new Error("Sebagian kisi-kisi tidak ditemukan.");
+    const invalidBlueprint = blueprints.find((item) => !item.currentVersion);
+    if (invalidBlueprint) throw new Error(`Kisi-kisi ${invalidBlueprint.code} belum memiliki versi aktif.`);
+
+    const existingAssignments = await tx.questionWritingAssignment.findMany({
+      where: { blueprintId: { in: blueprintIds } },
+      select: { blueprint: { select: { code: true } } }
+    });
+    if (existingAssignments.length) {
+      const usedCodes = Array.from(new Set(existingAssignments.map((item) => item.blueprint.code))).join(", ");
+      throw new Error(`Kisi-kisi berikut sudah diplot ke penulis: ${usedCodes}.`);
     }
+
+    await tx.questionWritingAssignment.createMany({
+      data: blueprints.map((blueprint) => ({
+        blueprintId: blueprint.id,
+        assignedToId,
+        assignedById: user.id,
+        targetCount: blueprint.currentVersion!.expectedQuestionCount,
+        noteHtml,
+        dueAt,
+        status: "ASSIGNED" as const
+      }))
+    });
   });
   revalidatePath("/assignments");
   revalidatePath("/questions");
@@ -60,6 +81,11 @@ async function updateWritingAssignment(formData: FormData) {
   await db.$transaction(async (tx) => {
     const existing = await tx.questionWritingAssignment.findUnique({ where: { id } });
     if (!existing) throw new Error("Plotting penulis tidak ditemukan.");
+    const duplicateBlueprint = await tx.questionWritingAssignment.findFirst({
+      where: { blueprintId, id: { not: id } },
+      select: { blueprint: { select: { code: true } } }
+    });
+    if (duplicateBlueprint) throw new Error(`Kisi-kisi ${duplicateBlueprint.blueprint.code} sudah diplot ke penulis lain.`);
     if (existing.blueprintId !== blueprintId || existing.assignedToId !== assignedToId) {
       await tx.questionWritingAssignment.delete({ where: { id } });
       await tx.questionWritingAssignment.upsert({
@@ -113,21 +139,35 @@ async function deleteWritingAssignment(formData: FormData) {
 async function createValidationAssignment(formData: FormData) {
   "use server";
   const user = await requireActionUser(["EXAM_ADMIN", "SUPER_ADMIN"]);
-  const blueprintId = requiredText(formData, "blueprintId");
   const assignedToId = requiredText(formData, "assignedToId");
+  const blueprintIds = selectedBlueprintIds(formData);
+  const noteHtml = getHtml(formData, "note");
 
   await db.$transaction(async (tx) => {
-    const blueprint = await tx.blueprint.findUnique({ where: { id: blueprintId }, include: { currentVersion: true } });
-    if (!blueprint?.currentVersion) throw new Error("Kisi-kisi belum memiliki versi aktif.");
-    await syncQuestionSlots(blueprintId, blueprint.currentVersion.expectedQuestionCount, tx);
-    const questions = await tx.question.findMany({ where: { blueprintId }, select: { id: true } });
-    const questionIds = questions.map((item) => item.id);
-    const noteHtml = getHtml(formData, "note");
-
-    await tx.questionValidationAssignment.updateMany({
-      where: { questionId: { in: questionIds }, assignedToId },
-      data: { noteHtml, assignedById: user.id, status: "ASSIGNED" }
+    const blueprints = await tx.blueprint.findMany({
+      where: { id: { in: blueprintIds } },
+      include: { currentVersion: true }
     });
+    if (blueprints.length !== blueprintIds.length) throw new Error("Sebagian kisi-kisi tidak ditemukan.");
+    const invalidBlueprint = blueprints.find((item) => !item.currentVersion);
+    if (invalidBlueprint) throw new Error(`Kisi-kisi ${invalidBlueprint.code} belum memiliki versi aktif.`);
+
+    const existingAssignments = await tx.questionValidationAssignment.findMany({
+      where: { question: { blueprintId: { in: blueprintIds } } },
+      select: { question: { select: { blueprint: { select: { code: true } } } } }
+    });
+    if (existingAssignments.length) {
+      const usedCodes = Array.from(new Set(existingAssignments.map((item) => item.question.blueprint.code))).join(", ");
+      throw new Error(`Kisi-kisi berikut sudah diplot ke validator: ${usedCodes}.`);
+    }
+
+    for (const blueprint of blueprints) {
+      await syncQuestionSlots(blueprint.id, blueprint.currentVersion!.expectedQuestionCount, tx);
+    }
+
+    const questions = await tx.question.findMany({ where: { blueprintId: { in: blueprintIds } }, select: { id: true } });
+    const questionIds = questions.map((item) => item.id);
+
     await tx.questionValidationAssignment.createMany({
       data: questionIds.map((questionId) => ({ questionId, assignedToId, assignedById: user.id, noteHtml, status: "ASSIGNED" as const })),
       skipDuplicates: true
@@ -152,6 +192,15 @@ async function updateValidationAssignment(formData: FormData) {
   const noteHtml = getHtml(formData, "note");
 
   await db.$transaction(async (tx) => {
+    const duplicateValidation = await tx.questionValidationAssignment.findFirst({
+      where: {
+        question: { blueprintId },
+        ...(blueprintId === oldBlueprintId ? { assignedToId: { not: oldAssignedToId } } : {})
+      },
+      select: { question: { select: { blueprint: { select: { code: true } } } } }
+    });
+    if (duplicateValidation) throw new Error(`Kisi-kisi ${duplicateValidation.question.blueprint.code} sudah diplot ke validator lain.`);
+
     await tx.questionValidationAssignment.deleteMany({
       where: { assignedToId: oldAssignedToId, question: { blueprintId: oldBlueprintId } }
     });
@@ -208,10 +257,11 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
   const totalWritingAssignments = await db.questionWritingAssignment.count();
   const writingPagination = paginationWindow(totalWritingAssignments, requestedPage, requestedSize);
 
-  const [blueprints, authors, validators, writingAssignments, validationAssignments] = await Promise.all([
+  const [blueprints, authors, validators, assignedWritingBlueprints, writingAssignments, validationAssignments] = await Promise.all([
     db.blueprint.findMany({ orderBy: { code: "asc" }, include: { currentVersion: true, questions: true } }),
     db.user.findMany({ where: { isActive: true, roles: { some: { role: { code: { in: ["QUESTION_AUTHOR", "SUPER_ADMIN"] } } } } }, orderBy: { name: "asc" } }),
     db.user.findMany({ where: { isActive: true, roles: { some: { role: { code: { in: ["QUESTION_VALIDATOR", "SUPER_ADMIN"] } } } } }, orderBy: { name: "asc" } }),
+    db.questionWritingAssignment.findMany({ select: { blueprintId: true } }),
     db.questionWritingAssignment.findMany({
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: activeTab === "writer" ? writingPagination.skip : 0,
@@ -235,6 +285,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
   }));
   const authorOptions = authors.map((user) => ({ id: user.id, label: `${user.name} (${user.email})` }));
   const validatorOptions = validators.map((user) => ({ id: user.id, label: `${user.name} (${user.email})` }));
+  const unavailableWritingBlueprintIds = Array.from(new Set(assignedWritingBlueprints.map((item) => item.blueprintId))) as string[];
 
   const validationGroupMap = validationAssignments.reduce((groups, item) => {
     const blueprint = item.question.blueprint;
@@ -267,6 +318,7 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
   const allValidationGroups: any[] = (Array.from(validationGroupMap.values()) as any[]).sort(
     (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
   );
+  const unavailableValidationBlueprintIds = Array.from(new Set(allValidationGroups.map((item) => item.blueprintId))) as string[];
   const totalValidationGroups = allValidationGroups.length;
   const validationPagination = paginationWindow(totalValidationGroups, requestedPage, requestedSize);
   const validationGroups = validationPagination.take
@@ -297,28 +349,36 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
 
       {activeTab === "writer" ? (
         <section className="assignment-tab-layout">
-          <WritingAssignmentForm action={createWritingAssignment} blueprints={blueprintOptions} authors={authorOptions} />
+          <details className="create-panel-toggle card">
+            <summary className="create-panel-summary">
+              <span><Plus size={18} /> Tambah plotting penulis soal</span>
+              <ChevronDown className="details-chevron" size={18} />
+            </summary>
+            <div className="create-panel-body">
+              <WritingAssignmentForm action={createWritingAssignment} blueprints={blueprintOptions} authors={authorOptions} unavailableBlueprintIds={unavailableWritingBlueprintIds} />
+            </div>
+          </details>
           <section className="card panel data-table-wrap">
             <div className="panel-heading"><div><h3>Daftar plotting penulis</h3><p className="muted-text">Target mengikuti jumlah slot pada kisi-kisi.</p></div><span className="badge">{totalWritingAssignments} tugas</span></div>
             <table className="data-table">
-              <thead><tr><th>Kisi-kisi</th><th>Penulis</th><th>Progress</th><th>Status</th><th>Aksi</th></tr></thead>
+              <thead><tr><th>Penulis</th><th>Kisi-kisi</th><th>Progress</th><th>Status</th><th>Aksi</th></tr></thead>
               <tbody>
                 {writingAssignments.map((item) => {
                   const filled = item.blueprint.questions.filter((question) => question.currentVersionId).length;
                   return (
                     <tr key={item.id}>
-                      <td><strong>{item.blueprint.code}</strong><br /><span className="muted-text">{(item.blueprint.currentVersion?.testGroupHtml ?? "").replace(/<[^>]+>/g, "")}</span><br /><span className="muted-text">Batas: {item.dueAt ? item.dueAt.toLocaleDateString("id-ID") : "-"}</span></td>
-                      <td>{item.assignedTo.name}</td>
+                      <td>{item.assignedTo.name}<br /><span className="muted-text">Batas: {item.dueAt ? item.dueAt.toLocaleDateString("id-ID") : "-"}</span></td>
+                      <td><strong>{item.blueprint.code}</strong><br /><span className="muted-text">{(item.blueprint.currentVersion?.testGroupHtml ?? "").replace(/<[^>]+>/g, "")}</span></td>
                       <td><div className="compact-progress"><span style={{ width: `${Math.min(100, (filled / Math.max(1, item.targetCount)) * 100)}%` }} /></div><strong>{filled}/{item.targetCount}</strong> soal terisi</td>
                       <td><span className="badge warning">{item.status.replaceAll("_", " ")}</span></td>
                       <td className="table-actions">
-                        <details className="action-details"><summary className="secondary-button"><Pencil size={15} /> Edit</summary><WritingAssignmentForm action={updateWritingAssignment} compact blueprints={blueprintOptions} authors={authorOptions} initial={{ id: item.id, blueprintId: item.blueprintId, assignedToId: item.assignedToId, targetCount: item.targetCount, noteHtml: item.noteHtml, status: item.status, dueAt: dateInput(item.dueAt) }} /></details>
+                        <details className="action-details"><summary className="secondary-button"><Pencil size={15} /> Edit</summary><WritingAssignmentForm action={updateWritingAssignment} compact blueprints={blueprintOptions} authors={authorOptions} unavailableBlueprintIds={unavailableWritingBlueprintIds.filter((blueprintId) => blueprintId !== item.blueprintId)} initial={{ id: item.id, blueprintId: item.blueprintId, assignedToId: item.assignedToId, targetCount: item.targetCount, noteHtml: item.noteHtml, status: item.status, dueAt: dateInput(item.dueAt) }} /></details>
                         <form action={deleteWritingAssignment}><input type="hidden" name="id" value={item.id} /><button className="danger-button" type="submit"><Trash2 size={15} /> Hapus</button></form>
                       </td>
                     </tr>
                   );
                 })}
-                {!writingAssignments.length ? <tr><td colSpan={5}><div className="empty-state"><p>Belum ada plotting penulis soal.</p><span>Pilih kode kisi-kisi dan penulis pada form di samping.</span></div></td></tr> : null}
+                {!writingAssignments.length ? <tr><td colSpan={5}><div className="empty-state"><p>Belum ada plotting penulis soal.</p><span>Klik tombol tambah, pilih penulis, lalu centang kisi-kisi yang akan ditugaskan.</span></div></td></tr> : null}
               </tbody>
             </table>
             <PaginationControls
@@ -336,28 +396,36 @@ export default async function AssignmentsPage({ searchParams }: PageProps) {
         </section>
       ) : (
         <section className="assignment-tab-layout">
-          <ValidationAssignmentForm action={createValidationAssignment} blueprints={blueprintOptions} validators={validatorOptions} />
+          <details className="create-panel-toggle card">
+            <summary className="create-panel-summary">
+              <span><Plus size={18} /> Tambah plotting validator soal</span>
+              <ChevronDown className="details-chevron" size={18} />
+            </summary>
+            <div className="create-panel-body">
+              <ValidationAssignmentForm action={createValidationAssignment} blueprints={blueprintOptions} validators={validatorOptions} unavailableBlueprintIds={unavailableValidationBlueprintIds} />
+            </div>
+          </details>
           <section className="card panel data-table-wrap">
             <div className="panel-heading"><div><h3>Daftar plotting validator</h3><p className="muted-text">Setiap baris mewakili satu kode kisi-kisi, bukan satu soal.</p></div><span className="badge">{totalValidationGroups} tugas</span></div>
             <table className="data-table">
-              <thead><tr><th>Kisi-kisi</th><th>Validator</th><th>Cakupan</th><th>Status</th><th>Aksi</th></tr></thead>
+              <thead><tr><th>Validator</th><th>Kisi-kisi</th><th>Cakupan</th><th>Status</th><th>Aksi</th></tr></thead>
               <tbody>
                 {validationGroups.map((group) => {
                   const status = group.statuses.size === 1 ? Array.from(group.statuses)[0] as string : "IN_REVIEW";
                   return (
                     <tr key={group.key}>
-                      <td><strong>{group.blueprintCode}</strong><br /><span className="muted-text">{group.blueprintTitle}</span></td>
                       <td>{group.assignedToName}</td>
+                      <td><strong>{group.blueprintCode}</strong><br /><span className="muted-text">{group.blueprintTitle}</span></td>
                       <td><strong>{group.total} slot</strong><br /><span className="muted-text">{group.filled} terisi • {group.ready} siap/divalidasi</span></td>
                       <td><span className="badge warning">{status.replaceAll("_", " ")}</span></td>
                       <td className="table-actions">
-                        <details className="action-details"><summary className="secondary-button"><Pencil size={15} /> Edit</summary><ValidationAssignmentForm action={updateValidationAssignment} compact blueprints={blueprintOptions} validators={validatorOptions} initial={{ blueprintId: group.blueprintId, originalBlueprintId: group.blueprintId, assignedToId: group.assignedToId, originalAssignedToId: group.assignedToId, noteHtml: group.noteHtml, status }} /></details>
+                        <details className="action-details"><summary className="secondary-button"><Pencil size={15} /> Edit</summary><ValidationAssignmentForm action={updateValidationAssignment} compact blueprints={blueprintOptions} validators={validatorOptions} unavailableBlueprintIds={unavailableValidationBlueprintIds.filter((blueprintId) => blueprintId !== group.blueprintId)} initial={{ blueprintId: group.blueprintId, originalBlueprintId: group.blueprintId, assignedToId: group.assignedToId, originalAssignedToId: group.assignedToId, noteHtml: group.noteHtml, status }} /></details>
                         <form action={deleteValidationAssignment}><input type="hidden" name="blueprintId" value={group.blueprintId} /><input type="hidden" name="assignedToId" value={group.assignedToId} /><button className="danger-button" type="submit"><Trash2 size={15} /> Hapus</button></form>
                       </td>
                     </tr>
                   );
                 })}
-                {!validationGroups.length ? <tr><td colSpan={5}><div className="empty-state"><p>Belum ada plotting validator soal.</p><span>Pilih kode kisi-kisi; seluruh slot soal akan langsung ditautkan ke validator.</span></div></td></tr> : null}
+                {!validationGroups.length ? <tr><td colSpan={5}><div className="empty-state"><p>Belum ada plotting validator soal.</p><span>Klik tombol tambah, pilih validator, lalu centang kisi-kisi yang akan divalidasi.</span></div></td></tr> : null}
               </tbody>
             </table>
             <PaginationControls
