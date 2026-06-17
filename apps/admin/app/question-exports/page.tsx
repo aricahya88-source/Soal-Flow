@@ -44,7 +44,14 @@ function htmlToText(html: string | null | undefined) {
 export default async function QuestionExportsPage() {
   await requirePageUser(["EXAM_ADMIN", "SUPER_ADMIN"]);
 
-  const [totalQuestions, approvedQuestions, totalBlueprints, blueprints] = await Promise.all([
+  const [
+    totalQuestions,
+    approvedQuestions,
+    totalBlueprints,
+    blueprints,
+    questionCountsByBlueprint,
+    approvedQuestionCountsByBlueprint,
+  ] = await Promise.all([
     db.question.count({ where: { currentVersionId: { not: null } } }),
     db.question.count({ where: { currentVersionId: { not: null }, status: "APPROVED" } }),
     db.blueprint.count({ where: { currentVersionId: { not: null } } }),
@@ -64,17 +71,37 @@ export default async function QuestionExportsPage() {
         },
       },
     }),
+    db.question.groupBy({
+      by: ["blueprintId"],
+      where: { currentVersionId: { not: null } },
+      _count: { _all: true },
+    }),
+    db.question.groupBy({
+      by: ["blueprintId"],
+      where: { currentVersionId: { not: null }, status: "APPROVED" },
+      _count: { _all: true },
+    }),
   ]);
+
+  const countMap = new Map(questionCountsByBlueprint.map((item) => [item.blueprintId, item._count._all]));
+  const approvedCountMap = new Map(
+    approvedQuestionCountsByBlueprint.map((item) => [item.blueprintId, item._count._all]),
+  );
 
   const unvalidatedQuestions = Math.max(totalQuestions - approvedQuestions, 0);
   const blueprintOptions = blueprints.map((blueprint) => {
     const version = blueprint.currentVersion;
+    const allCount = countMap.get(blueprint.id) ?? 0;
+    const approvedCount = approvedCountMap.get(blueprint.id) ?? 0;
     return {
       id: blueprint.id,
       code: blueprint.code,
       title: htmlToText(version?.titleHtml) || htmlToText(version?.indicatorHtml) || "Tanpa judul",
       group: htmlToText(version?.testGroupHtml),
       mode: version?.questionMode ?? "",
+      allCount,
+      approvedCount,
+      unvalidatedCount: Math.max(allCount - approvedCount, 0),
     };
   });
 
