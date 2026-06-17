@@ -300,10 +300,88 @@ function setWidths(sheet: XLSX.WorkSheet, widths: number[]) {
   sheet["!cols"] = widths.map((wch) => ({ wch }));
 }
 
+const EXCEL_CELL_LIMIT = 32767;
+const EXCEL_SAFE_CHUNK_SIZE = 30000;
+
+type LongExcelCell = {
+  sourceSheet: string;
+  rowNumber: number;
+  questionCode: string;
+  blueprintCode: string;
+  columnName: string;
+  partNumber: number;
+  totalParts: number;
+  text: string;
+};
+
+function splitExcelText(value: string) {
+  const parts: string[] = [];
+  for (let index = 0; index < value.length; index += EXCEL_SAFE_CHUNK_SIZE) {
+    parts.push(value.slice(index, index + EXCEL_SAFE_CHUNK_SIZE));
+  }
+  return parts.length ? parts : [""];
+}
+
+function makeExcelCellSafe(
+  value: unknown,
+  context: {
+    sourceSheet: string;
+    rowNumber: number;
+    questionCode: string;
+    blueprintCode: string;
+    columnName: string;
+  },
+  longCells: LongExcelCell[],
+) {
+  if (typeof value !== "string") return value;
+  if (value.length <= EXCEL_CELL_LIMIT) return value;
+
+  const parts = splitExcelText(value);
+  const baseIndex = longCells.length + 1;
+  parts.forEach((part, partIndex) => {
+    longCells.push({
+      ...context,
+      partNumber: partIndex + 1,
+      totalParts: parts.length,
+      text: part,
+    });
+  });
+
+  const notice = `\n\n[CATATAN: isi kolom ini melebihi batas Excel ${EXCEL_CELL_LIMIT.toLocaleString("id-ID")} karakter per sel. Isi lengkap dipecah pada sheet "Teks Panjang", mulai baris referensi #${baseIndex}.]`;
+  return `${value.slice(0, EXCEL_SAFE_CHUNK_SIZE - notice.length)}${notice}`;
+}
+
+function makeRowsExcelSafe<T extends Record<string, unknown>>(
+  rows: T[],
+  sourceSheet: string,
+  longCells: LongExcelCell[],
+) {
+  return rows.map((row, rowIndex) => {
+    const rowNumber = rowIndex + 1;
+    const questionCode = String(row["Kode soal"] ?? row["kode_soal"] ?? "");
+    const blueprintCode = String(row["Kode kisi-kisi"] ?? row["kode_kisi"] ?? "");
+
+    return Object.fromEntries(
+      Object.entries(row).map(([columnName, value]) => [
+        columnName,
+        makeExcelCellSafe(value, { sourceSheet, rowNumber, questionCode, blueprintCode, columnName }, longCells),
+      ]),
+    ) as T;
+  });
+}
+
+function makeAoaExcelSafe(rows: unknown[][]) {
+  return rows.map((row) => row.map((value) => {
+    if (typeof value !== "string" || value.length <= EXCEL_CELL_LIMIT) return value;
+    return value.slice(0, EXCEL_SAFE_CHUNK_SIZE);
+  }));
+}
+
 function buildWorkbook(params: ExportParams, questions: ExportQuestion[]) {
   const workbook = XLSX.utils.book_new();
+  const longCells: LongExcelCell[] = [];
 
-  const summarySheet = XLSX.utils.aoa_to_sheet(buildSummaryRows(params, questions));
+  const summarySheet = XLSX.utils.aoa_to_sheet(makeAoaExcelSafe(buildSummaryRows(params, questions)));
   setWidths(summarySheet, [28, 100]);
   XLSX.utils.book_append_sheet(workbook, summarySheet, "Ringkasan");
 
@@ -356,7 +434,7 @@ function buildWorkbook(params: ExportParams, questions: ExportQuestion[]) {
     };
   });
 
-  const questionSheet = XLSX.utils.json_to_sheet(rows);
+  const questionSheet = XLSX.utils.json_to_sheet(makeRowsExcelSafe(rows, "Data Soal HTML", longCells));
   setWidths(questionSheet, [6, 18, 20, 12, 18, 34, 28, 28, 48, 48, 34, 34, 18, 18, 18, 18, 18, 18, 18, 18, 34, 42, 70, 70, 34, 34, 70, 60, 60, 60, 60, 60, 14, 18, 70, 22, 22]);
   XLSX.utils.book_append_sheet(workbook, questionSheet, "Data Soal HTML");
 
@@ -386,7 +464,7 @@ function buildWorkbook(params: ExportParams, questions: ExportQuestion[]) {
       Pembahasan: htmlToText(version?.explanationHtml),
     };
   });
-  const readableSheet = XLSX.utils.json_to_sheet(readableRows);
+  const readableSheet = XLSX.utils.json_to_sheet(makeRowsExcelSafe(readableRows, "Versi Teks", longCells));
   setWidths(readableSheet, [6, 18, 18, 18, 34, 18, 14, 18, 70, 70, 42, 42, 42, 42, 42, 10, 15, 70]);
   XLSX.utils.book_append_sheet(workbook, readableSheet, "Versi Teks");
 
@@ -408,9 +486,26 @@ function buildWorkbook(params: ExportParams, questions: ExportQuestion[]) {
       pembahasan: version?.explanationHtml ?? "",
     };
   });
-  const templateSheet = XLSX.utils.json_to_sheet(templateRows);
+  const templateSheet = XLSX.utils.json_to_sheet(makeRowsExcelSafe(templateRows, "Format Template", longCells));
   setWidths(templateSheet, [18, 18, 15, 70, 52, 52, 52, 52, 52, 14, 14, 70]);
   XLSX.utils.book_append_sheet(workbook, templateSheet, "Format Template");
+
+  if (longCells.length) {
+    const longCellRows = longCells.map((cell, index) => ({
+      No: index + 1,
+      "Sheet asal": cell.sourceSheet,
+      "Baris data": cell.rowNumber,
+      "Kode soal": cell.questionCode,
+      "Kode kisi-kisi": cell.blueprintCode,
+      Kolom: cell.columnName,
+      "Bagian ke": cell.partNumber,
+      "Total bagian": cell.totalParts,
+      Isi: cell.text,
+    }));
+    const longCellSheet = XLSX.utils.json_to_sheet(longCellRows);
+    setWidths(longCellSheet, [8, 22, 12, 18, 18, 28, 12, 12, 110]);
+    XLSX.utils.book_append_sheet(workbook, longCellSheet, "Teks Panjang");
+  }
 
   return workbook;
 }
