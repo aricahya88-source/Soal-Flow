@@ -14,12 +14,17 @@ export const runtime = "nodejs";
 type ExportFormat = "xlsx" | "pdf";
 type ValidationFilter = "ALL" | "APPROVED" | "UNVALIDATED";
 type SelectionMode = "ALL" | "RANDOM_PER_BLUEPRINT";
+type StimulusFilter =
+  | { kind: "ALL" }
+  | { kind: "ORDER"; order: number }
+  | { kind: "GROUP"; stimulusId: string };
 
 type ExportParams = {
   format: ExportFormat;
   validation: ValidationFilter;
   selection: SelectionMode;
-  stimulusOrder: string;
+  stimulusFilter: StimulusFilter;
+  blueprintCodes: string[];
   includeAnswer: boolean;
   includeBlueprint: boolean;
   includeStimulus: boolean;
@@ -126,15 +131,42 @@ const selectionLabels: Record<SelectionMode, string> = {
   RANDOM_PER_BLUEPRINT: "Random 1 soal pada setiap kisi-kisi",
 };
 
-function normalizeStimulusOrder(value: string | null) {
-  if (!value || value === "ALL") return "ALL";
-  const numeric = Number(value);
-  if (!Number.isInteger(numeric) || numeric < 1) return "ALL";
-  return String(numeric);
+function parseStimulusFilter(value: string | null, legacyStimulusOrder: string | null): StimulusFilter {
+  const source = value || (legacyStimulusOrder && legacyStimulusOrder !== "ALL" ? `ORDER:${legacyStimulusOrder}` : "ALL");
+  if (!source || source === "ALL") return { kind: "ALL" };
+
+  if (source.startsWith("ORDER:")) {
+    const order = Number(source.slice("ORDER:".length));
+    if (Number.isInteger(order) && order > 0) return { kind: "ORDER", order };
+  }
+
+  if (source.startsWith("GROUP:")) {
+    const stimulusId = source.slice("GROUP:".length).trim();
+    if (stimulusId) return { kind: "GROUP", stimulusId };
+  }
+
+  const numeric = Number(source);
+  if (Number.isInteger(numeric) && numeric > 0) return { kind: "ORDER", order: numeric };
+
+  return { kind: "ALL" };
 }
 
-function stimulusOrderLabel(value: string) {
-  return value === "ALL" ? "Semua soal, termasuk independent dan semua nomor stimulus" : `Nomor stimulus ${value} saja`;
+function stimulusFilterLabel(value: StimulusFilter) {
+  if (value.kind === "ORDER") return `Urutan stimulus ${value.order} — soal independen`;
+  if (value.kind === "GROUP") return "Satu kelompok stimulus/bacaan terpilih";
+  return "Semua soal: independen dan seluruh kelompok stimulus";
+}
+
+function stimulusFilterFilenamePart(value: StimulusFilter) {
+  if (value.kind === "ORDER") return `order-${value.order}`;
+  if (value.kind === "GROUP") return `group-${value.stimulusId.slice(0, 12)}`;
+  return "all-stimulus";
+}
+
+function readBlueprintCodes(url: URL) {
+  return Array.from(new Set(url.searchParams.getAll("blueprintCode")
+    .map((value) => value.trim())
+    .filter(Boolean)));
 }
 
 function checked(url: URL, name: string, fallback = false) {
@@ -156,7 +188,8 @@ function readParams(request: Request): ExportParams {
         ? validationRaw
         : "ALL",
     selection: selectionRaw === "RANDOM_PER_BLUEPRINT" ? "RANDOM_PER_BLUEPRINT" : "ALL",
-    stimulusOrder: normalizeStimulusOrder(url.searchParams.get("stimulusOrder")),
+    stimulusFilter: parseStimulusFilter(url.searchParams.get("stimulusFilter"), url.searchParams.get("stimulusOrder")),
+    blueprintCodes: readBlueprintCodes(url),
     includeAnswer: checked(url, "includeAnswer", true),
     includeBlueprint: checked(url, "includeBlueprint", true),
     includeStimulus: checked(url, "includeStimulus", true),
@@ -221,10 +254,17 @@ function buildWhere(params: ExportParams) {
     where.status = { not: "APPROVED" };
   }
 
-  if (params.stimulusOrder !== "ALL") {
+  if (params.blueprintCodes.length) {
+    where.blueprint = { code: { in: params.blueprintCodes } };
+  }
+
+  if (params.stimulusFilter.kind === "ORDER") {
+    where.stimulusId = null;
     where.currentVersion = {
-      is: { orderInStimulus: Number(params.stimulusOrder) },
+      is: { orderInStimulus: params.stimulusFilter.order },
     };
+  } else if (params.stimulusFilter.kind === "GROUP") {
+    where.stimulusId = params.stimulusFilter.stimulusId;
   }
 
   return where;
@@ -297,7 +337,8 @@ function buildSummaryRows(params: ExportParams, questions: ExportQuestion[]) {
     ["Tanggal export", dateTime(new Date())],
     ["Status validasi", validationLabels[params.validation]],
     ["Mode export", selectionLabels[params.selection]],
-    ["Filter nomor stimulus", stimulusOrderLabel(params.stimulusOrder)],
+    ["Filter stimulus / kelompok bacaan", stimulusFilterLabel(params.stimulusFilter)],
+    ["Kisi-kisi dipilih", params.blueprintCodes.length ? params.blueprintCodes.join(", ") : "Semua kisi-kisi"],
     ["Jumlah soal", questions.length],
     ["Jumlah kisi-kisi", new Set(questions.map((question) => question.blueprint.code)).size],
     [],
@@ -401,6 +442,28 @@ function buildWorkbook(params: ExportParams, questions: ExportQuestion[]) {
   const readableSheet = XLSX.utils.json_to_sheet(readableRows);
   setWidths(readableSheet, [6, 18, 18, 18, 34, 18, 14, 18, 70, 70, 42, 42, 42, 42, 42, 10, 15, 70]);
   XLSX.utils.book_append_sheet(workbook, readableSheet, "Versi Teks");
+
+  const templateRows = questions.map((question) => {
+    const version = question.currentVersion;
+    const options = optionMap(question);
+    return {
+      kode_kisi: question.blueprint.code,
+      kode_soal: question.code,
+      urutan_stimulus: version?.orderInStimulus ?? "",
+      soal: version?.stemHtml ?? "",
+      opsi_a: options.A ?? "",
+      opsi_b: options.B ?? "",
+      opsi_c: options.C ?? "",
+      opsi_d: options.D ?? "",
+      opsi_e: options.E ?? "",
+      kunci_jawaban: version?.answerKey ?? "",
+      kesulitan: version?.difficulty ?? "",
+      pembahasan: version?.explanationHtml ?? "",
+    };
+  });
+  const templateSheet = XLSX.utils.json_to_sheet(templateRows);
+  setWidths(templateSheet, [18, 18, 15, 70, 52, 52, 52, 52, 52, 14, 14, 70]);
+  XLSX.utils.book_append_sheet(workbook, templateSheet, "Format Template");
 
   return workbook;
 }
@@ -940,7 +1003,8 @@ async function buildPdf(params: ExportParams, questions: ExportQuestion[]) {
   pdf.line(`Tanggal export: ${dateTime(new Date())}`, 10);
   pdf.line(`Status validasi: ${validationLabels[params.validation]}`, 10);
   pdf.line(`Mode export: ${selectionLabels[params.selection]}`, 10);
-  pdf.line(`Filter nomor stimulus: ${stimulusOrderLabel(params.stimulusOrder)}`, 10);
+  pdf.line(`Filter stimulus / kelompok bacaan: ${stimulusFilterLabel(params.stimulusFilter)}`, 10);
+  pdf.line(`Kisi-kisi dipilih: ${params.blueprintCodes.length ? params.blueprintCodes.join(", ") : "Semua kisi-kisi"}`, 10);
   pdf.line(`Jumlah soal: ${questions.length}`, 10);
   pdf.line(`Jumlah kisi-kisi: ${new Set(questions.map((question) => question.blueprint.code)).size}`, 10);
   pdf.gap(12);
@@ -1014,7 +1078,7 @@ export async function GET(request: Request) {
   const params = readParams(request);
   const questions = await loadQuestions(params);
   const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
-  const baseFilename = safeFilename(`export-soal-${params.validation}-${params.selection}-${params.stimulusOrder}-${timestamp}`);
+  const baseFilename = safeFilename(`export-soal-${params.validation}-${params.selection}-${stimulusFilterFilenamePart(params.stimulusFilter)}-${timestamp}`);
 
   if (params.format === "pdf") {
     const buffer = await buildPdf(params, questions);
