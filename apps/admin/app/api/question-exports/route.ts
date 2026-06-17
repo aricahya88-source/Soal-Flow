@@ -14,16 +14,10 @@ export const runtime = "nodejs";
 type ExportFormat = "xlsx" | "pdf";
 type ValidationFilter = "ALL" | "APPROVED" | "UNVALIDATED";
 type SelectionMode = "ALL" | "RANDOM_PER_BLUEPRINT";
-type StimulusFilter =
-  | { kind: "ALL" }
-  | { kind: "ORDER"; order: number }
-  | { kind: "GROUP"; stimulusId: string };
-
 type ExportParams = {
   format: ExportFormat;
   validation: ValidationFilter;
   selection: SelectionMode;
-  stimulusFilter: StimulusFilter;
   blueprintCodes: string[];
   includeAnswer: boolean;
   includeBlueprint: boolean;
@@ -131,38 +125,6 @@ const selectionLabels: Record<SelectionMode, string> = {
   RANDOM_PER_BLUEPRINT: "Random 1 soal pada setiap kisi-kisi",
 };
 
-function parseStimulusFilter(value: string | null, legacyStimulusOrder: string | null): StimulusFilter {
-  const source = value || (legacyStimulusOrder && legacyStimulusOrder !== "ALL" ? `ORDER:${legacyStimulusOrder}` : "ALL");
-  if (!source || source === "ALL") return { kind: "ALL" };
-
-  if (source.startsWith("ORDER:")) {
-    const order = Number(source.slice("ORDER:".length));
-    if (Number.isInteger(order) && order > 0) return { kind: "ORDER", order };
-  }
-
-  if (source.startsWith("GROUP:")) {
-    const stimulusId = source.slice("GROUP:".length).trim();
-    if (stimulusId) return { kind: "GROUP", stimulusId };
-  }
-
-  const numeric = Number(source);
-  if (Number.isInteger(numeric) && numeric > 0) return { kind: "ORDER", order: numeric };
-
-  return { kind: "ALL" };
-}
-
-function stimulusFilterLabel(value: StimulusFilter) {
-  if (value.kind === "ORDER") return `Urutan stimulus ${value.order} — soal independen`;
-  if (value.kind === "GROUP") return "Satu kelompok stimulus/bacaan terpilih";
-  return "Semua soal: independen dan seluruh kelompok stimulus";
-}
-
-function stimulusFilterFilenamePart(value: StimulusFilter) {
-  if (value.kind === "ORDER") return `order-${value.order}`;
-  if (value.kind === "GROUP") return `group-${value.stimulusId.slice(0, 12)}`;
-  return "all-stimulus";
-}
-
 function readBlueprintCodes(url: URL) {
   return Array.from(new Set(url.searchParams.getAll("blueprintCode")
     .map((value) => value.trim())
@@ -188,7 +150,6 @@ function readParams(request: Request): ExportParams {
         ? validationRaw
         : "ALL",
     selection: selectionRaw === "RANDOM_PER_BLUEPRINT" ? "RANDOM_PER_BLUEPRINT" : "ALL",
-    stimulusFilter: parseStimulusFilter(url.searchParams.get("stimulusFilter"), url.searchParams.get("stimulusOrder")),
     blueprintCodes: readBlueprintCodes(url),
     includeAnswer: checked(url, "includeAnswer", true),
     includeBlueprint: checked(url, "includeBlueprint", true),
@@ -258,14 +219,6 @@ function buildWhere(params: ExportParams) {
     where.blueprint = { code: { in: params.blueprintCodes } };
   }
 
-  if (params.stimulusFilter.kind === "ORDER") {
-    where.stimulusId = null;
-    where.currentVersion = {
-      is: { orderInStimulus: params.stimulusFilter.order },
-    };
-  } else if (params.stimulusFilter.kind === "GROUP") {
-    where.stimulusId = params.stimulusFilter.stimulusId;
-  }
 
   return where;
 }
@@ -337,15 +290,9 @@ function buildSummaryRows(params: ExportParams, questions: ExportQuestion[]) {
     ["Tanggal export", dateTime(new Date())],
     ["Status validasi", validationLabels[params.validation]],
     ["Mode export", selectionLabels[params.selection]],
-    ["Filter stimulus / kelompok bacaan", stimulusFilterLabel(params.stimulusFilter)],
     ["Kisi-kisi dipilih", params.blueprintCodes.length ? params.blueprintCodes.join(", ") : "Semua kisi-kisi"],
     ["Jumlah soal", questions.length],
     ["Jumlah kisi-kisi", new Set(questions.map((question) => question.blueprint.code)).size],
-    [],
-    [
-      "Catatan Excel",
-      "Kolom stem, pilihan jawaban, pembahasan, kisi-kisi, dan stimulus disimpan dalam bentuk HTML agar konten rich text tetap lengkap.",
-    ],
   ];
 }
 
@@ -1003,7 +950,6 @@ async function buildPdf(params: ExportParams, questions: ExportQuestion[]) {
   pdf.line(`Tanggal export: ${dateTime(new Date())}`, 10);
   pdf.line(`Status validasi: ${validationLabels[params.validation]}`, 10);
   pdf.line(`Mode export: ${selectionLabels[params.selection]}`, 10);
-  pdf.line(`Filter stimulus / kelompok bacaan: ${stimulusFilterLabel(params.stimulusFilter)}`, 10);
   pdf.line(`Kisi-kisi dipilih: ${params.blueprintCodes.length ? params.blueprintCodes.join(", ") : "Semua kisi-kisi"}`, 10);
   pdf.line(`Jumlah soal: ${questions.length}`, 10);
   pdf.line(`Jumlah kisi-kisi: ${new Set(questions.map((question) => question.blueprint.code)).size}`, 10);
@@ -1078,7 +1024,7 @@ export async function GET(request: Request) {
   const params = readParams(request);
   const questions = await loadQuestions(params);
   const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
-  const baseFilename = safeFilename(`export-soal-${params.validation}-${params.selection}-${stimulusFilterFilenamePart(params.stimulusFilter)}-${timestamp}`);
+  const baseFilename = safeFilename(`export-soal-${params.validation}-${params.selection}-${timestamp}`);
 
   if (params.format === "pdf") {
     const buffer = await buildPdf(params, questions);
