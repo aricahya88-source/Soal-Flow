@@ -16,28 +16,57 @@ function number(value: number) {
   return value.toLocaleString("id-ID");
 }
 
+type StimulusOrderStat = {
+  order: number;
+  questionCount: number;
+  blueprintCount: number;
+};
+
+function buildStimulusOrderStats(
+  rows: Array<{ blueprint: { code: string }; currentVersion: { orderInStimulus: number | null } | null }>,
+): StimulusOrderStat[] {
+  const grouped = new Map<number, { questionCount: number; blueprints: Set<string> }>();
+
+  for (const row of rows) {
+    const order = row.currentVersion?.orderInStimulus;
+    if (!order || order < 1) continue;
+
+    const current = grouped.get(order) ?? { questionCount: 0, blueprints: new Set<string>() };
+    current.questionCount += 1;
+    current.blueprints.add(row.blueprint.code);
+    grouped.set(order, current);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([order, stat]) => ({
+      order,
+      questionCount: stat.questionCount,
+      blueprintCount: stat.blueprints.size,
+    }))
+    .sort((left, right) => left.order - right.order);
+}
+
 export default async function QuestionExportsPage() {
   await requirePageUser(["EXAM_ADMIN", "SUPER_ADMIN"]);
 
-  const [totalQuestions, approvedQuestions, totalBlueprints, stimulusOneQuestions, stimulusTwoQuestions] = await Promise.all([
+  const [totalQuestions, approvedQuestions, totalBlueprints, stimulusOrderRows] = await Promise.all([
     db.question.count({ where: { currentVersionId: { not: null } } }),
     db.question.count({ where: { currentVersionId: { not: null }, status: "APPROVED" } }),
     db.blueprint.count({ where: { currentVersionId: { not: null } } }),
-    db.question.count({
+    db.question.findMany({
       where: {
         currentVersionId: { not: null },
-        currentVersion: { is: { orderInStimulus: 1 } },
+        currentVersion: { is: { orderInStimulus: { not: null } } },
       },
-    }),
-    db.question.count({
-      where: {
-        currentVersionId: { not: null },
-        currentVersion: { is: { orderInStimulus: 2 } },
+      select: {
+        blueprint: { select: { code: true } },
+        currentVersion: { select: { orderInStimulus: true } },
       },
     }),
   ]);
 
   const unvalidatedQuestions = Math.max(totalQuestions - approvedQuestions, 0);
+  const stimulusOrderStats = buildStimulusOrderStats(stimulusOrderRows);
 
   return (
     <AdminShell
@@ -49,7 +78,7 @@ export default async function QuestionExportsPage() {
         <div>
           <h2>Pengaturan export bank soal</h2>
           <p>
-            Pilih status validasi, pola pengambilan soal, filter urutan stimulus, lalu unduh dalam format Excel atau PDF.
+            Pilih status validasi, pola pengambilan soal, nomor stimulus dari data soal, lalu unduh dalam format Excel atau PDF.
           </p>
         </div>
         <span className="badge">Export Soal</span>
@@ -104,12 +133,18 @@ export default async function QuestionExportsPage() {
           </div>
 
           <label className="field-block">
-            <span className="field-label">Filter stimulus</span>
+            <span className="field-label">Filter nomor stimulus dari data kisi-kisi</span>
             <select className="select-input" name="stimulusOrder" defaultValue="ALL">
-              <option value="ALL">Semua soal, termasuk independent dan stimulus</option>
-              <option value="1">Soal urutan stimulus 1 saja ({number(stimulusOneQuestions)} soal)</option>
-              <option value="2">Soal urutan stimulus 2 saja ({number(stimulusTwoQuestions)} soal)</option>
+              <option value="ALL">Semua soal, termasuk independent dan semua nomor stimulus</option>
+              {stimulusOrderStats.map((stat) => (
+                <option key={stat.order} value={String(stat.order)}>
+                  Nomor stimulus {stat.order} saja ({number(stat.questionCount)} soal dari {number(stat.blueprintCount)} kisi-kisi)
+                </option>
+              ))}
             </select>
+            <small className="muted-text">
+              Pilihan nomor stimulus diambil otomatis dari data soal yang sudah mempunyai nomor/urutan stimulus pada setiap kisi-kisi.
+            </small>
           </label>
 
           <section className="card soft-card form-grid">
@@ -120,14 +155,17 @@ export default async function QuestionExportsPage() {
               </p>
             </div>
             <div className="two-columns">
+              <input type="hidden" name="includeAnswer" value="0" />
               <label className="check-row"><input type="checkbox" name="includeAnswer" value="1" defaultChecked /> Sertakan kunci jawaban</label>
+
+              <input type="hidden" name="includeBlueprint" value="0" />
               <label className="check-row"><input type="checkbox" name="includeBlueprint" value="1" defaultChecked /> Sertakan informasi kisi-kisi</label>
-              <label className="check-row"><input type="checkbox" name="includeStimulus" value="1" defaultChecked /> Sertakan teks bacaan/stimulus</label>
+
+              <input type="hidden" name="includeStimulus" value="0" />
+              <label className="check-row"><input type="checkbox" name="includeStimulus" value="1" defaultChecked /> Sertakan teks bacaan/stimulus dan gambar</label>
+
               <label className="check-row"><input type="checkbox" name="includeExplanation" value="1" /> Sertakan pembahasan</label>
             </div>
-            <input type="hidden" name="includeAnswer" value="0" />
-            <input type="hidden" name="includeBlueprint" value="0" />
-            <input type="hidden" name="includeStimulus" value="0" />
           </section>
 
           <div className="package-action-grid">
@@ -160,7 +198,7 @@ export default async function QuestionExportsPage() {
               <span className="package-field-number">2</span>
               <div>
                 <strong>PDF</strong>
-                <small>Berisi naskah soal siap baca dengan opsi kunci jawaban, kisi-kisi, stimulus, dan pembahasan.</small>
+                <small>Berisi naskah soal rapi, gambar dari stimulus/soal/opsi, kunci jawaban, kisi-kisi, dan pembahasan sesuai pilihan.</small>
               </div>
             </div>
           </section>
