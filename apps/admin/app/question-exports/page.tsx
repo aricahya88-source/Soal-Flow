@@ -6,6 +6,7 @@ import {
   FileDown,
   FileSpreadsheet,
   FileText,
+  ListChecks,
   ListFilter,
   Shuffle,
 } from "lucide-react";
@@ -16,57 +17,156 @@ function number(value: number) {
   return value.toLocaleString("id-ID");
 }
 
-type StimulusOrderStat = {
-  order: number;
+function decodeEntities(value: string) {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+}
+
+function htmlToText(html: string | null | undefined) {
+  return decodeEntities(html ?? "")
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\s*\/p\s*>/gi, "\n")
+    .replace(/<\s*\/div\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+type ExportStimulusStat = {
+  value: string;
+  label: string;
+  description: string;
   questionCount: number;
   blueprintCount: number;
+  sortKey: string;
 };
 
-function buildStimulusOrderStats(
-  rows: Array<{ blueprint: { code: string }; currentVersion: { orderInStimulus: number | null } | null }>,
-): StimulusOrderStat[] {
-  const grouped = new Map<number, { questionCount: number; blueprints: Set<string> }>();
+function buildExportStimulusStats(
+  rows: Array<{
+    blueprint: { code: string };
+    stimulusId: string | null;
+    stimulus: {
+      id: string;
+      code: string;
+      language: string;
+      currentVersion: { titleHtml: string } | null;
+    } | null;
+    currentVersion: { orderInStimulus: number | null } | null;
+  }>,
+): ExportStimulusStat[] {
+  const independentOrders = new Map<number, { questionCount: number; blueprints: Set<string> }>();
+  const stimulusGroups = new Map<
+    string,
+    {
+      code: string;
+      language: string;
+      title: string;
+      questionCount: number;
+      blueprints: Set<string>;
+    }
+  >();
 
   for (const row of rows) {
+    if (row.stimulusId && row.stimulus) {
+      const current = stimulusGroups.get(row.stimulusId) ?? {
+        code: row.stimulus.code,
+        language: row.stimulus.language,
+        title: htmlToText(row.stimulus.currentVersion?.titleHtml),
+        questionCount: 0,
+        blueprints: new Set<string>(),
+      };
+      current.questionCount += 1;
+      current.blueprints.add(row.blueprint.code);
+      stimulusGroups.set(row.stimulusId, current);
+      continue;
+    }
+
     const order = row.currentVersion?.orderInStimulus;
     if (!order || order < 1) continue;
 
-    const current = grouped.get(order) ?? { questionCount: 0, blueprints: new Set<string>() };
+    const current = independentOrders.get(order) ?? { questionCount: 0, blueprints: new Set<string>() };
     current.questionCount += 1;
     current.blueprints.add(row.blueprint.code);
-    grouped.set(order, current);
+    independentOrders.set(order, current);
   }
 
-  return Array.from(grouped.entries())
-    .map(([order, stat]) => ({
-      order,
+  const orderOptions: ExportStimulusStat[] = Array.from(independentOrders.entries()).map(([order, stat]) => ({
+    value: `ORDER:${order}`,
+    label: `Urutan stimulus ${order} — soal independen`,
+    description: `${number(stat.questionCount)} soal dari ${number(stat.blueprints.size)} kisi-kisi`,
+    questionCount: stat.questionCount,
+    blueprintCount: stat.blueprints.size,
+    sortKey: `A-${String(order).padStart(5, "0")}`,
+  }));
+
+  const groupOptions: ExportStimulusStat[] = Array.from(stimulusGroups.entries()).map(([stimulusId, stat]) => {
+    const isEnglish = stat.language.toLowerCase().startsWith("en") || /bahasa\s+inggris|english/i.test(stat.title);
+    const title = stat.title ? ` — ${stat.title}` : "";
+    return {
+      value: `GROUP:${stimulusId}`,
+      label: `${isEnglish ? "Kelompok Bahasa Inggris" : "Kelompok stimulus"} ${stat.code}${title}`,
+      description: `${number(stat.questionCount)} soal dari ${number(stat.blueprints.size)} kisi-kisi`,
       questionCount: stat.questionCount,
       blueprintCount: stat.blueprints.size,
-    }))
-    .sort((left, right) => left.order - right.order);
+      sortKey: `B-${stat.code}`,
+    };
+  });
+
+  return [...orderOptions, ...groupOptions].sort((left, right) => left.sortKey.localeCompare(right.sortKey, "id-ID"));
 }
 
 export default async function QuestionExportsPage() {
   await requirePageUser(["EXAM_ADMIN", "SUPER_ADMIN"]);
 
-  const [totalQuestions, approvedQuestions, totalBlueprints, stimulusOrderRows] = await Promise.all([
+  const [totalQuestions, approvedQuestions, totalBlueprints, stimulusRows, blueprints] = await Promise.all([
     db.question.count({ where: { currentVersionId: { not: null } } }),
     db.question.count({ where: { currentVersionId: { not: null }, status: "APPROVED" } }),
     db.blueprint.count({ where: { currentVersionId: { not: null } } }),
     db.question.findMany({
-      where: {
-        currentVersionId: { not: null },
-        currentVersion: { is: { orderInStimulus: { not: null } } },
-      },
+      where: { currentVersionId: { not: null } },
       select: {
+        stimulusId: true,
         blueprint: { select: { code: true } },
+        stimulus: {
+          select: {
+            id: true,
+            code: true,
+            language: true,
+            currentVersion: { select: { titleHtml: true } },
+          },
+        },
         currentVersion: { select: { orderInStimulus: true } },
+      },
+    }),
+    db.blueprint.findMany({
+      where: { currentVersionId: { not: null } },
+      orderBy: { code: "asc" },
+      select: {
+        id: true,
+        code: true,
+        currentVersion: {
+          select: {
+            titleHtml: true,
+            testGroupHtml: true,
+            indicatorHtml: true,
+            questionMode: true,
+          },
+        },
       },
     }),
   ]);
 
   const unvalidatedQuestions = Math.max(totalQuestions - approvedQuestions, 0);
-  const stimulusOrderStats = buildStimulusOrderStats(stimulusOrderRows);
+  const stimulusStats = buildExportStimulusStats(stimulusRows);
 
   return (
     <AdminShell
@@ -78,7 +178,7 @@ export default async function QuestionExportsPage() {
         <div>
           <h2>Pengaturan export bank soal</h2>
           <p>
-            Pilih status validasi, pola pengambilan soal, nomor stimulus dari data soal, lalu unduh dalam format Excel atau PDF.
+            Pilih status validasi, pola pengambilan soal, filter urutan stimulus/kelompok bacaan, kisi-kisi tertentu, lalu unduh ke Excel atau PDF.
           </p>
         </div>
         <span className="badge">Export Soal</span>
@@ -108,7 +208,7 @@ export default async function QuestionExportsPage() {
           <div>
             <h3><FileDown size={19} /> Form export soal</h3>
             <p className="muted-text">
-              Excel selalu dibuat lengkap dengan kode soal, HTML soal, opsi, kunci, pembahasan, kisi-kisi, serta teks bacaan/stimulus bila tersedia.
+              Excel selalu dibuat lengkap dengan kode soal, HTML soal, opsi, kunci, pembahasan, kisi-kisi, teks bacaan/stimulus, dan sheet format template.
             </p>
           </div>
         </div>
@@ -133,17 +233,17 @@ export default async function QuestionExportsPage() {
           </div>
 
           <label className="field-block">
-            <span className="field-label">Filter nomor stimulus dari data kisi-kisi</span>
-            <select className="select-input" name="stimulusOrder" defaultValue="ALL">
-              <option value="ALL">Semua soal, termasuk independent dan semua nomor stimulus</option>
-              {stimulusOrderStats.map((stat) => (
-                <option key={stat.order} value={String(stat.order)}>
-                  Nomor stimulus {stat.order} saja ({number(stat.questionCount)} soal dari {number(stat.blueprintCount)} kisi-kisi)
+            <span className="field-label">Filter stimulus / kelompok bacaan</span>
+            <select className="select-input" name="stimulusFilter" defaultValue="ALL">
+              <option value="ALL">Semua soal: independen dan seluruh kelompok stimulus</option>
+              {stimulusStats.map((stat) => (
+                <option key={stat.value} value={stat.value}>
+                  {stat.label} ({stat.description})
                 </option>
               ))}
             </select>
             <small className="muted-text">
-              Pilihan nomor stimulus diambil otomatis dari data soal yang sudah mempunyai nomor/urutan stimulus pada setiap kisi-kisi.
+              Untuk soal independen, pilihan diambil dari kolom urutan_stimulus. Untuk soal kelompok seperti Bahasa Inggris, pilihan diambil per kelompok stimulus/bacaan sehingga satu kelompok bacaan dapat diexport tersendiri.
             </small>
           </label>
 
@@ -168,6 +268,35 @@ export default async function QuestionExportsPage() {
             </div>
           </section>
 
+          <details className="card soft-card form-grid">
+            <summary className="panel-heading" style={{ cursor: "pointer" }}>
+              <div>
+                <h3><ListChecks size={18} /> Export berdasarkan kisi-kisi yang dipilih</h3>
+                <p className="muted-text">
+                  Klik untuk hide/unhide. Bila tidak ada kisi-kisi yang dicentang, sistem otomatis mengekspor semua kisi-kisi yang lolos filter di atas.
+                </p>
+              </div>
+            </summary>
+            <div className="form-grid" style={{ maxHeight: 360, overflow: "auto", paddingTop: 12 }}>
+              {blueprints.map((blueprint) => {
+                const version = blueprint.currentVersion;
+                const title = htmlToText(version?.titleHtml) || htmlToText(version?.indicatorHtml) || "Tanpa judul";
+                const group = htmlToText(version?.testGroupHtml);
+                return (
+                  <label key={blueprint.id} className="check-row" style={{ alignItems: "flex-start" }}>
+                    <input type="checkbox" name="blueprintCode" value={blueprint.code} />
+                    <span>
+                      <strong>{blueprint.code}</strong> — {title}
+                      <small className="muted-text" style={{ display: "block" }}>
+                        {group ? `${group} · ` : ""}{version?.questionMode ?? ""}
+                      </small>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </details>
+
           <div className="package-action-grid">
             <button className="primary-button" type="submit" name="format" value="xlsx">
               <FileSpreadsheet size={17} /> Export Excel HTML
@@ -189,7 +318,7 @@ export default async function QuestionExportsPage() {
               <span className="package-field-number">1</span>
               <div>
                 <strong>Excel</strong>
-                <small>Berisi sheet Ringkasan, Data Soal HTML, dan Versi Teks.</small>
+                <small>Berisi sheet Ringkasan, Data Soal HTML, Versi Teks, dan Format Template dengan kolom kode_kisi, kode_soal, urutan_stimulus, soal, opsi_a sampai pembahasan.</small>
               </div>
             </div>
           </section>
@@ -206,8 +335,8 @@ export default async function QuestionExportsPage() {
             <div>
               <span className="package-field-number">3</span>
               <div>
-                <strong>Random per kisi-kisi</strong>
-                <small>Jika dipilih, sistem mengambil satu soal secara acak dari setiap kisi-kisi yang lolos filter.</small>
+                <strong>Filter stimulus</strong>
+                <small>Soal independen memakai urutan_stimulus; soal kelompok memakai pilihan kelompok stimulus/bacaan, termasuk kelompok Bahasa Inggris.</small>
               </div>
             </div>
           </section>
