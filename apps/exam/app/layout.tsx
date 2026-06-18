@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ThemeProvider } from "@seleksi/ui";
+import { ImageCacheBuster, ThemeProvider } from "@seleksi/ui";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -11,7 +11,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="id" suppressHydrationWarning>
-      <body><ThemeProvider>{children}</ThemeProvider></body>
+      <body>
+        <ImageCacheBuster />
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }
