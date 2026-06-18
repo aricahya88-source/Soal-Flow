@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Script from "next/script";
-import { ThemeProvider } from "@seleksi/ui";
+import { ImageCacheBuster, ThemeProvider } from "@seleksi/ui";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,6 +13,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="id" suppressHydrationWarning>
       <body>
+        <ImageCacheBuster />
         <Script id="mathjax-config" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: `window.MathJax = { tex: { inlineMath: [['\\\\(', '\\\\)']], displayMath: [['\\\\[', '\\\\]']] }, svg: { fontCache: 'global' } };` }} />
         <Script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" strategy="afterInteractive" />
         <ThemeProvider>{children}</ThemeProvider>
