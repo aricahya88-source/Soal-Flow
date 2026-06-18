@@ -1302,6 +1302,9 @@ details[open] > summary .details-chevron { transform: rotate(180deg); }
   width: fit-content;
   cursor: pointer;
 }
+.question-fix-details {
+  margin-top: 16px;
+}
 .question-fix-details[open] > summary {
   margin-bottom: 8px;
 }
@@ -1312,6 +1315,80 @@ details[open] > summary .details-chevron { transform: rotate(180deg); }
 .question-fix-details .inline-edit-form {
   margin-top: 0;
 }
+.question-code-meta {
+  display: grid;
+  justify-items: start;
+  gap: 7px;
+  margin-top: 6px;
+}
+.compact-status {
+  padding: 4px 8px;
+  font-size: .72rem;
+}
+.validator-note-preview {
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 28%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand) 5%, var(--surface));
+}
+.validator-note-preview > strong {
+  color: var(--brand-strong);
+  font-size: .84rem;
+}
+.validator-note-preview .rich-preview {
+  max-width: none;
+}
+.review-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+.review-save-toast {
+  position: fixed;
+  z-index: 10000;
+  top: 22px;
+  right: 22px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 11px;
+  width: min(430px, calc(100vw - 32px));
+  padding: 14px 15px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, .22);
+}
+.review-save-toast.success {
+  border-color: color-mix(in srgb, #16a34a 48%, var(--border));
+}
+.review-save-toast.error {
+  border-color: color-mix(in srgb, #dc2626 48%, var(--border));
+}
+.review-save-toast.success > svg { color: #16a34a; }
+.review-save-toast.error > svg { color: #dc2626; }
+.review-save-toast > div {
+  display: grid;
+  gap: 3px;
+}
+.review-save-toast strong { font-size: .92rem; }
+.review-save-toast span {
+  color: var(--muted);
+  font-size: .83rem;
+  line-height: 1.45;
+}
+.review-save-toast > button {
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
 
 @media (max-width: 860px) {
   .question-preview-card {
@@ -1320,6 +1397,10 @@ details[open] > summary .details-chevron { transform: rotate(180deg); }
   }
   .answer-option-preview {
     grid-template-columns: 1fr;
+  }
+  .review-save-toast {
+    top: 14px;
+    right: 16px;
   }
 }
 
