@@ -1,5 +1,5 @@
 import { AdminShell } from "@/components/admin-shell";
-import { ReviewQuestionForm } from "@/components/review-question-form";
+import { ReviewQuestionForm, type ReviewActionState } from "@/components/review-question-form";
 import { StimulusReviewForm } from "@/components/stimulus-review-form";
 import { ColumnToggleTable } from "@/components/column-toggle-table";
 import { PaginationControls } from "@/components/pagination-controls";
@@ -19,6 +19,14 @@ const difficultyLabels: Record<string, string> = {
   EASY: "Mudah",
   MEDIUM: "Sedang",
   HARD: "Sulit",
+};
+const statusLabels: Record<string, string> = {
+  SUBMITTED: "Submitted",
+  IN_REVIEW: "In Review",
+  REVISION_REQUIRED: "Perlu Revisi",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+  NEEDS_ALIGNMENT_REVIEW: "Perlu Cek Keselarasan",
 };
 
 function hasMeaningfulHtml(html?: string | null) {
@@ -40,85 +48,110 @@ function statusFromDecision(value: string): ContentStatus {
   return ContentStatus.IN_REVIEW;
 }
 
-async function validateQuestion(formData: FormData) {
+async function validateQuestion(
+  _previousState: ReviewActionState,
+  formData: FormData,
+): Promise<ReviewActionState> {
   "use server";
-  const user = await requireActionUser(["QUESTION_VALIDATOR", "SUPER_ADMIN"]);
-  const id = requiredText(formData, "id");
-  const decision = String(formData.get("decision") || "APPROVE");
-  const status = statusFromDecision(decision);
+  try {
+    const user = await requireActionUser(["QUESTION_VALIDATOR", "SUPER_ADMIN"]);
+    const id = requiredText(formData, "id");
+    const decision = String(formData.get("decision") || "APPROVE");
+    const status = statusFromDecision(decision);
+    let savedQuestionCode = "";
 
-  await db.$transaction(async (tx) => {
-    const existing = await tx.question.findUnique({
-      where: { id },
-      include: {
-        currentVersion: true,
-        versions: { orderBy: { versionNumber: "desc" }, take: 1 },
-        validationAssignments: {
-          where: { assignedToId: user.id, status: { not: ValidationTaskStatus.CANCELLED } },
+    await db.$transaction(async (tx) => {
+      const existing = await tx.question.findUnique({
+        where: { id },
+        include: {
+          currentVersion: true,
+          versions: { orderBy: { versionNumber: "desc" }, take: 1 },
+          validationAssignments: {
+            where: { assignedToId: user.id, status: { not: ValidationTaskStatus.CANCELLED } },
+          },
         },
-      },
-    });
-    if (!existing?.currentVersion) throw new Error("Soal tidak ditemukan.");
-    if (
-      !user.roles.includes("SUPER_ADMIN") &&
-      existing.validationAssignments.length === 0
-    ) {
-      throw new Error("Soal ini tidak diplot kepada Anda.");
-    }
+      });
+      if (!existing?.currentVersion) throw new Error("Soal tidak ditemukan.");
+      if (
+        !user.roles.includes("SUPER_ADMIN") &&
+        existing.validationAssignments.length === 0
+      ) {
+        throw new Error("Soal ini tidak diplot kepada Anda.");
+      }
 
-    const nextVersion = (existing.versions[0]?.versionNumber ?? 0) + 1;
-    const answerKey = String(
-      formData.get("answerKey") || existing.currentVersion.answerKey,
-    ) as "A" | "B" | "C" | "D" | "E";
-    const version = await tx.questionVersion.create({
-      data: {
-        questionId: id,
-        versionNumber: nextVersion,
-        blueprintVersionId: existing.currentVersion.blueprintVersionId,
-        stimulusVersionId: existing.currentVersion.stimulusVersionId,
-        orderInStimulus: existing.currentVersion.orderInStimulus,
-        stemHtml: getHtml(formData, "stem", true),
-        explanationHtml: getHtml(formData, "explanation"),
-        difficulty: String(
-          formData.get("difficulty") || existing.currentVersion.difficulty,
-        ) as "EASY" | "MEDIUM" | "HARD",
-        answerKey,
-        keyChanged: answerKey !== existing.currentVersion.answerKey,
-        changeSummaryHtml:
-          getHtml(formData, "validatorNotes") ??
-          "<p>Perubahan validasi soal.</p>",
-        createdById: user.id,
-        options: { create: readOptions(formData) },
-      },
-    });
+      savedQuestionCode = existing.code;
+      const nextVersion = (existing.versions[0]?.versionNumber ?? 0) + 1;
+      const answerKey = String(
+        formData.get("answerKey") || existing.currentVersion.answerKey,
+      ) as "A" | "B" | "C" | "D" | "E";
+      const version = await tx.questionVersion.create({
+        data: {
+          questionId: id,
+          versionNumber: nextVersion,
+          blueprintVersionId: existing.currentVersion.blueprintVersionId,
+          stimulusVersionId: existing.currentVersion.stimulusVersionId,
+          orderInStimulus: existing.currentVersion.orderInStimulus,
+          stemHtml: getHtml(formData, "stem", true),
+          explanationHtml: getHtml(formData, "explanation"),
+          difficulty: String(
+            formData.get("difficulty") || existing.currentVersion.difficulty,
+          ) as "EASY" | "MEDIUM" | "HARD",
+          answerKey,
+          keyChanged: answerKey !== existing.currentVersion.answerKey,
+          changeSummaryHtml:
+            getHtml(formData, "validatorNotes") ??
+            "<p>Perubahan validasi soal.</p>",
+          createdById: user.id,
+          options: { create: readOptions(formData) },
+        },
+      });
 
-    await tx.question.update({
-      where: { id },
-      data: { currentVersionId: version.id, status },
+      await tx.question.update({
+        where: { id },
+        data: { currentVersionId: version.id, status },
+      });
+      await tx.questionValidationAssignment.updateMany({
+        where: {
+          questionId: id,
+          assignedToId: user.id,
+          status: { not: ValidationTaskStatus.CANCELLED },
+        },
+        data: { status: status === ContentStatus.IN_REVIEW ? ValidationTaskStatus.IN_REVIEW : ValidationTaskStatus.DONE },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: `QUESTION_${decision}`,
+          entityType: "Question",
+          entityId: id,
+          metadata: { status, versionNumber: nextVersion },
+        },
+      });
     });
-    await tx.questionValidationAssignment.updateMany({
-      where: {
-        questionId: id,
-        assignedToId: user.id,
-        status: { not: ValidationTaskStatus.CANCELLED },
-      },
-      data: { status: status === ContentStatus.IN_REVIEW ? ValidationTaskStatus.IN_REVIEW : ValidationTaskStatus.DONE },
-    });
-    await tx.auditLog.create({
-      data: {
-        actorId: user.id,
-        action: `QUESTION_${decision}`,
-        entityType: "Question",
-        entityId: id,
-        metadata: { status, versionNumber: nextVersion },
-      },
-    });
-  });
-  revalidatePath("/reviews");
-  revalidatePath("/questions");
-  revalidatePath("/packages");
-  revalidatePath("/assignments");
-  revalidatePath("/");
+    revalidatePath("/reviews");
+    revalidatePath("/questions");
+    revalidatePath("/packages");
+    revalidatePath("/assignments");
+    revalidatePath("/");
+
+    const successMessages: Record<string, string> = {
+      APPROVE: `Soal ${savedQuestionCode} berhasil disimpan dan disetujui.`,
+      EDIT_AND_FORWARD: `Perbaikan dan catatan validator untuk soal ${savedQuestionCode} berhasil disimpan.`,
+      REQUEST_REVISION: `Permintaan revisi untuk soal ${savedQuestionCode} berhasil disimpan.`,
+      REJECT: `Penolakan soal ${savedQuestionCode} berhasil disimpan.`,
+    };
+    return {
+      ok: true,
+      message: successMessages[decision] ?? `Validasi soal ${savedQuestionCode} berhasil disimpan.`,
+      timestamp: Date.now(),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Validasi soal tidak dapat disimpan.",
+      timestamp: Date.now(),
+    };
+  }
 }
 
 async function validateStimulus(formData: FormData) {
@@ -421,12 +454,25 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
                       const difficulty = current?.difficulty
                         ? difficultyLabels[current.difficulty] ?? current.difficulty
                         : "-";
+                      const statusLabel = statusLabels[row.status] ?? row.status.replaceAll("_", " ");
+                      const validatorNotesHtml = [
+                        "APPROVED",
+                        "IN_REVIEW",
+                        "REVISION_REQUIRED",
+                        "REJECTED",
+                      ].includes(row.status)
+                        ? current?.changeSummaryHtml
+                        : null;
                       return (
                         <tr key={row.id}>
                           <td>
                             <strong className="code-label">{row.code}</strong>
-                            <br />
-                            <span className="muted-text">Kunci: {answerKey}</span>
+                            <div className="question-code-meta">
+                              <span className="muted-text">Kunci: {answerKey}</span>
+                              <span className={`badge compact-status ${row.status === "APPROVED" ? "success" : "warning"}`}>
+                                {statusLabel}
+                              </span>
+                            </div>
                           </td>
                           <td>
                             <article className="question-preview-card">
@@ -471,6 +517,15 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
                                   />
                                 </details>
                               ) : null}
+                              {hasMeaningfulHtml(validatorNotesHtml) ? (
+                                <section className="validator-note-preview">
+                                  <strong>Catatan validator tersimpan</strong>
+                                  <div
+                                    className="rich-preview"
+                                    dangerouslySetInnerHTML={{ __html: validatorNotesHtml ?? "" }}
+                                  />
+                                </section>
+                              ) : null}
                             </article>
                           </td>
                           <td>{current?.createdBy.name ?? "-"}</td>
@@ -478,7 +533,7 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
                             <span
                               className={`badge ${row.status === "APPROVED" ? "success" : "warning"}`}
                             >
-                              {row.status.replaceAll("_", " ")}
+                              {statusLabel}
                             </span>
                           </td>
                           <td>
@@ -495,15 +550,6 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
                                       value="APPROVE"
                                     >
                                       <CheckCircle2 size={16} /> Setujui
-                                    </button>
-                                    <button
-                                      className="secondary-button"
-                                      type="submit"
-                                      form={reviewFormId}
-                                      name="decision"
-                                      value="EDIT_AND_FORWARD"
-                                    >
-                                      <ShieldCheck size={16} /> Simpan perbaikan
                                     </button>
                                     <button
                                       className="secondary-button"
@@ -538,6 +584,7 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
                                         id: row.id,
                                         stemHtml: current?.stemHtml,
                                         explanationHtml: current?.explanationHtml,
+                                        validatorNotesHtml,
                                         answerKey: current?.answerKey,
                                         difficulty: current?.difficulty,
                                         options: values,
