@@ -257,7 +257,22 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
           },
         }),
   };
-  const totalQuestions = await db.question.count({ where: reviewWhere });
+  const [totalQuestions, validatedQuestions] = await Promise.all([
+    db.question.count({ where: reviewWhere }),
+    db.question.count({
+      where: {
+        ...reviewWhere,
+        status: {
+          in: [
+            ContentStatus.APPROVED,
+            ContentStatus.REVISION_REQUIRED,
+            ContentStatus.REJECTED,
+          ],
+        },
+      },
+    }),
+  ]);
+  const unvalidatedQuestions = Math.max(0, totalQuestions - validatedQuestions);
   const pagination = paginationWindow(totalQuestions, parsePage(params?.page), parsePageSize(params?.size));
 
   const questions = await db.question.findMany({
@@ -309,7 +324,17 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
             agar keselarasan soal 1–5 dapat diperiksa.
           </p>
         </div>
-        <span className="badge warning">{groups.length} kelompok</span>
+        <div className="question-page-stats">
+          <span>
+            <strong>{totalQuestions}</strong> jumlah soal
+          </span>
+          <span>
+            <strong>{validatedQuestions}</strong> sudah divalidasi
+          </span>
+          <span>
+            <strong>{unvalidatedQuestions}</strong> belum divalidasi
+          </span>
+        </div>
       </div>
 
       <section className="review-groups">
