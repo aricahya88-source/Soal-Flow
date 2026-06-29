@@ -36,7 +36,7 @@ export function ProCbtExportDialog() {
               <div>
                 <h3 id="procbt-export-title" style={{ marginTop: 0 }}>Export v.ProCBT</h3>
                 <p className="muted-text" style={{ marginBottom: 0 }}>
-                  Isi identitas export. Pilihan status, pola export, dan kisi-kisi tetap mengikuti form export soal yang sudah dipilih.
+                  Isi identitas export. Kolom Versi menjadi akhiran kategori, misalnya Literasi Sains + 1 menjadi Literasi Sains-1.
                 </p>
               </div>
               <button className="secondary-button compact-button" type="button" onClick={() => setIsOpen(false)} aria-label="Tutup export v.ProCBT">
@@ -57,7 +57,7 @@ export function ProCbtExportDialog() {
 
               <label className="field-block">
                 <span className="field-label">Versi</span>
-                <input className="text-input" name="procbtVersion" required placeholder="Contoh: Dasar Penalaran" />
+                <input className="text-input" name="procbtVersion" required placeholder="Contoh: 1" />
               </label>
             </div>
 
