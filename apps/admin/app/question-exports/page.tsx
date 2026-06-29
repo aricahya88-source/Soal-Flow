@@ -84,9 +84,11 @@ export default async function QuestionExportsPage() {
     }),
   ]);
 
-  const countMap = new Map(questionCountsByBlueprint.map((item) => [item.blueprintId, item._count._all]));
-  const approvedCountMap = new Map(
-    approvedQuestionCountsByBlueprint.map((item) => [item.blueprintId, item._count._all]),
+  const countMap = new Map<string, number>(
+    questionCountsByBlueprint.map((item) => [item.blueprintId, Number(item._count._all)]),
+  );
+  const approvedCountMap = new Map<string, number>(
+    approvedQuestionCountsByBlueprint.map((item) => [item.blueprintId, Number(item._count._all)]),
   );
 
   const unvalidatedQuestions = Math.max(totalQuestions - approvedQuestions, 0);
