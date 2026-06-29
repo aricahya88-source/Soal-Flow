@@ -458,6 +458,13 @@ function firstImageUrl(html: string | null | undefined, assets?: ExportAssetLink
   return refs[0]?.src ?? imageUrlFromText(html);
 }
 
+function appendProCbtVersion(category: string, version: string) {
+  const baseCategory = category.trim();
+  const suffix = version.trim();
+  if (!baseCategory || !suffix) return baseCategory;
+  return baseCategory.endsWith(`-${suffix}`) ? baseCategory : `${baseCategory}-${suffix}`;
+}
+
 function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) {
   const workbook = XLSX.utils.book_new();
   const rows = questions.map((question) => {
@@ -465,8 +472,11 @@ function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) 
     const blueprintVersion = question.blueprint.currentVersion;
     const stimulusVersion = question.stimulus?.currentVersion;
     const options = optionObjectMap(question);
-    const testGroup = plainText(blueprintVersion?.testGroupHtml) || question.blueprint.code;
-    const topic = params.procbtVersion || plainText(blueprintVersion?.testTopicHtml) || plainText(blueprintVersion?.titleHtml) || question.blueprint.code;
+    const baseCategory = plainText(blueprintVersion?.testGroupHtml)
+      || plainText(blueprintVersion?.testTopicHtml)
+      || plainText(blueprintVersion?.titleHtml)
+      || question.blueprint.code;
+    const proCbtCategory = appendProCbtVersion(baseCategory, params.procbtVersion);
     const material = plainText(blueprintVersion?.materialHtml) || plainText(blueprintVersion?.titleHtml) || plainText(blueprintVersion?.indicatorHtml) || question.blueprint.code;
     const stimulusText = [plainText(stimulusVersion?.instructionsHtml), plainText(stimulusVersion?.contentHtml)]
       .filter(Boolean)
@@ -476,11 +486,11 @@ function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) 
 
     return [
       params.procbtProdi,
-      topic,
-      testGroup,
+      proCbtCategory,
+      proCbtCategory,
       material,
       params.procbtTipe,
-      testGroup,
+      proCbtCategory,
       dotWhenEmpty(version?.stemHtml),
       stimulusText,
       questionImage,
