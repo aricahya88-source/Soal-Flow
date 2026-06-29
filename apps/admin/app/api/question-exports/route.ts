@@ -11,7 +11,7 @@ import { db } from "@seleksi/database";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type ExportFormat = "xlsx" | "pdf";
+type ExportFormat = "xlsx" | "pdf" | "procbt";
 type ValidationFilter = "ALL" | "APPROVED" | "UNVALIDATED";
 type SelectionMode = "ALL" | "RANDOM_PER_BLUEPRINT";
 type ExportParams = {
@@ -23,6 +23,9 @@ type ExportParams = {
   includeBlueprint: boolean;
   includeStimulus: boolean;
   includeExplanation: boolean;
+  procbtProdi: string;
+  procbtTipe: string;
+  procbtVersion: string;
 };
 
 type ExportAssetLink = {
@@ -139,7 +142,8 @@ function checked(url: URL, name: string, fallback = false) {
 
 function readParams(request: Request): ExportParams {
   const url = new URL(request.url);
-  const format = url.searchParams.get("format") === "pdf" ? "pdf" : "xlsx";
+  const formatRaw = url.searchParams.get("format");
+  const format: ExportFormat = formatRaw === "pdf" || formatRaw === "procbt" ? formatRaw : "xlsx";
   const validationRaw = url.searchParams.get("validation") ?? "ALL";
   const selectionRaw = url.searchParams.get("selection") ?? "ALL";
 
@@ -155,6 +159,9 @@ function readParams(request: Request): ExportParams {
     includeBlueprint: checked(url, "includeBlueprint", true),
     includeStimulus: checked(url, "includeStimulus", true),
     includeExplanation: checked(url, "includeExplanation"),
+    procbtProdi: (url.searchParams.get("procbtProdi") ?? "").trim(),
+    procbtTipe: (url.searchParams.get("procbtTipe") ?? "").trim(),
+    procbtVersion: (url.searchParams.get("procbtVersion") ?? "").trim(),
   };
 }
 
@@ -375,6 +382,126 @@ function makeAoaExcelSafe(rows: unknown[][]) {
     if (typeof value !== "string" || value.length <= EXCEL_CELL_LIMIT) return value;
     return value.slice(0, EXCEL_SAFE_CHUNK_SIZE);
   }));
+}
+
+
+const PROCBT_HEADERS = [
+  "Prodi",
+  "Topik Soal",
+  "Kategori Materi",
+  "Materi Soal",
+  "Tipe Soal",
+  "Kategori Soal",
+  "Soal",
+  "Deskripsi Soal",
+  "URL Gambar Soal",
+  "A",
+  "URL Gambar A",
+  "B",
+  "URL Gambar B",
+  "C",
+  "URL Gambar C",
+  "D",
+  "URL Gambar D",
+  "E",
+  "URL Gambar E",
+  "Jawaban",
+] as const;
+
+type ExportQuestionOption = NonNullable<ExportQuestion["currentVersion"]>["options"][number];
+
+function optionObjectMap(question: ExportQuestion) {
+  return Object.fromEntries(
+    (question.currentVersion?.options ?? [])
+      .slice()
+      .sort((left, right) => left.sortOrder - right.sortOrder)
+      .map((option) => [option.label, option]),
+  ) as Record<string, ExportQuestionOption | undefined>;
+}
+
+function plainText(value: string | null | undefined) {
+  return htmlToText(value).replace(/\s+/g, " ").trim();
+}
+
+function isImageUrlText(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  if (/^data:image\//i.test(text)) return true;
+  return /^(?:https?:\/\/|\/|\.\.?\/)?[^\s]+\.(?:png|jpe?g|gif|webp|svg)(?:[?#][^\s]*)?$/i.test(text);
+}
+
+function dotWhenEmpty(value: string | null | undefined) {
+  const text = plainText(value);
+  if (!text || isImageUrlText(text)) return ".";
+  return text;
+}
+
+function imageUrlFromText(value: string | null | undefined) {
+  const text = plainText(value);
+  return isImageUrlText(text) ? text : "";
+}
+
+function extractImageLinksFromHtml(html: string | null | undefined): ImageRef[] {
+  const refs: ImageRef[] = [];
+  const source = html ?? "";
+  for (const match of source.matchAll(/<\s*a\b[^>]*>/gi)) {
+    const tag = match[0];
+    const href = getAttr(tag, "href");
+    if (!href || !isImageUrlText(href)) continue;
+    refs.push({ src: href, alt: getAttr(tag, "title") || null, caption: getAttr(tag, "title") || null, key: href });
+  }
+  return refs;
+}
+
+function firstImageUrl(html: string | null | undefined, assets?: ExportAssetLink[] | null) {
+  const refs = mergeImageRefs(extractImageRefsFromHtml(html), extractImageLinksFromHtml(html), assetImageRefs(assets));
+  return refs[0]?.src ?? imageUrlFromText(html);
+}
+
+function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) {
+  const workbook = XLSX.utils.book_new();
+  const rows = questions.map((question) => {
+    const version = question.currentVersion;
+    const blueprintVersion = question.blueprint.currentVersion;
+    const stimulusVersion = question.stimulus?.currentVersion;
+    const options = optionObjectMap(question);
+    const testGroup = plainText(blueprintVersion?.testGroupHtml) || question.blueprint.code;
+    const topic = params.procbtVersion || plainText(blueprintVersion?.testTopicHtml) || plainText(blueprintVersion?.titleHtml) || question.blueprint.code;
+    const material = plainText(blueprintVersion?.materialHtml) || plainText(blueprintVersion?.titleHtml) || plainText(blueprintVersion?.indicatorHtml) || question.blueprint.code;
+    const stimulusText = [plainText(stimulusVersion?.instructionsHtml), plainText(stimulusVersion?.contentHtml)]
+      .filter(Boolean)
+      .join(" ");
+    const questionImage = firstImageUrl(version?.stemHtml, version?.assets)
+      || firstImageUrl(stimulusVersion?.contentHtml, stimulusVersion?.assets);
+
+    return [
+      params.procbtProdi,
+      topic,
+      testGroup,
+      material,
+      params.procbtTipe,
+      testGroup,
+      dotWhenEmpty(version?.stemHtml),
+      stimulusText,
+      questionImage,
+      dotWhenEmpty(options.A?.contentHtml),
+      firstImageUrl(options.A?.contentHtml, options.A?.assets),
+      dotWhenEmpty(options.B?.contentHtml),
+      firstImageUrl(options.B?.contentHtml, options.B?.assets),
+      dotWhenEmpty(options.C?.contentHtml),
+      firstImageUrl(options.C?.contentHtml, options.C?.assets),
+      dotWhenEmpty(options.D?.contentHtml),
+      firstImageUrl(options.D?.contentHtml, options.D?.assets),
+      dotWhenEmpty(options.E?.contentHtml),
+      firstImageUrl(options.E?.contentHtml, options.E?.assets),
+      version?.answerKey || ".",
+    ];
+  });
+
+  const sheet = XLSX.utils.aoa_to_sheet(makeAoaExcelSafe([PROCBT_HEADERS as unknown as string[], ...rows]));
+  setWidths(sheet, [22, 28, 28, 38, 20, 28, 70, 70, 45, 42, 45, 42, 45, 42, 45, 42, 45, 42, 45, 14]);
+  XLSX.utils.book_append_sheet(workbook, sheet, "Template PG");
+  return workbook;
 }
 
 function buildWorkbook(params: ExportParams, questions: ExportQuestion[]) {
@@ -1120,6 +1247,20 @@ export async function GET(request: Request) {
   const questions = await loadQuestions(params);
   const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
   const baseFilename = safeFilename(`export-soal-${params.validation}-${params.selection}-${timestamp}`);
+
+  if (params.format === "procbt") {
+    const workbook = buildProCbtWorkbook(params, questions);
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const procbtFilename = safeFilename(`export-procbt-${params.procbtProdi || "prodi"}-${params.procbtTipe || "tipe"}-${params.procbtVersion || "versi"}-${timestamp}`);
+    return new NextResponse(buffer, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${procbtFilename}.xlsx"`,
+        "Cache-Control": "private, no-store, max-age=0",
+      },
+    });
+  }
 
   if (params.format === "pdf") {
     const buffer = await buildPdf(params, questions);
