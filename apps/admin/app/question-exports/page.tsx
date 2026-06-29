@@ -10,6 +10,7 @@ import {
   Shuffle,
 } from "lucide-react";
 import { BlueprintExportSelector } from "./blueprint-export-selector";
+import { ProCbtExportDialog } from "./procbt-export-dialog";
 
 export const dynamic = "force-dynamic";
 
@@ -108,7 +109,7 @@ export default async function QuestionExportsPage() {
   return (
     <AdminShell
       title="Export Soal"
-      subtitle="Export bank soal ke Excel berisi HTML atau PDF siap baca"
+      subtitle="Export bank soal ke Excel HTML, Excel ProCBT, atau PDF siap baca"
       allowedRoles={["EXAM_ADMIN", "SUPER_ADMIN"]}
     >
       <div className="page-header">
@@ -146,7 +147,7 @@ export default async function QuestionExportsPage() {
             <div>
               <h3><FileDown size={19} /> Form export soal</h3>
               <p className="muted-text">
-                Excel selalu dibuat lengkap dengan kode soal, HTML soal, opsi, kunci, pembahasan, kisi-kisi, teks bacaan/stimulus, dan sheet format template.
+                Export Excel HTML tetap berisi data lengkap bank soal, sedangkan export v.ProCBT mengikuti template PG tanpa HTML.
               </p>
             </div>
           </div>
@@ -173,7 +174,7 @@ export default async function QuestionExportsPage() {
             <div>
               <strong>Pengaturan khusus PDF</strong>
               <p className="muted-text">
-                Pilihan ini hanya memengaruhi PDF. Excel tetap mengekspor data lengkap dalam sel HTML dan versi teks.
+                Pilihan ini hanya memengaruhi PDF. Export Excel HTML dan v.ProCBT tidak memakai pengaturan PDF ini.
               </p>
             </div>
             <div className="two-columns">
@@ -201,6 +202,7 @@ export default async function QuestionExportsPage() {
             <button className="secondary-button" type="submit" name="format" value="pdf">
               <FileText size={17} /> Export PDF
             </button>
+            <ProCbtExportDialog />
           </div>
         </section>
       </form>
