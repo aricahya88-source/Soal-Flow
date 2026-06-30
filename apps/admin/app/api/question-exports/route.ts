@@ -430,6 +430,23 @@ function isImageUrlText(value: string) {
   return /^(?:https?:\/\/|\/|\.\.?\/)?[^\s]+\.(?:png|jpe?g|gif|webp|svg)(?:[?#][^\s]*)?$/i.test(text);
 }
 
+function isBareImageFilename(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  if (/^data:image\//i.test(text)) return false;
+  if (/^(?:https?:\/\/|\/|\.\.?\/)/i.test(text)) return false;
+  if (/[\\/]/.test(text)) return false;
+  return /^[^\s<>"']+\.(?:png|jpe?g|gif|webp|svg)(?:[?#][^\s]*)?$/i.test(text);
+}
+
+function cleanImageUrlsForExcel(value: string) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !isBareImageFilename(line));
+}
+
 function stripImageReferencesFromHtml(html: string | null | undefined) {
   let source = html ?? "";
 
@@ -454,11 +471,21 @@ function richHtmlOrDot(html: string | null | undefined) {
   return htmlToText(cleaned) ? cleaned : ".";
 }
 
-function joinRichHtmlOrDot(values: Array<string | null | undefined>) {
+function richHtmlForProCbtQuestion(html: string | null | undefined, imageUrls: string) {
+  const cleaned = stripImageReferencesFromHtml(html);
+  return htmlToText(cleaned) ? cleaned : imageUrls.trim() ? "Perhatikan gambar berikut!" : ".";
+}
+
+function richHtmlForProCbtOption(html: string | null | undefined, imageUrls: string) {
+  const cleaned = stripImageReferencesFromHtml(html);
+  return htmlToText(cleaned) ? cleaned : imageUrls.trim() ? "'" : ".";
+}
+
+function joinRichHtmlOrEmpty(values: Array<string | null | undefined>) {
   const parts = values
     .map((value) => stripImageReferencesFromHtml(value))
     .filter((value) => htmlToText(value));
-  return parts.length ? parts.join("\n") : ".";
+  return parts.length ? parts.join("\n") : "";
 }
 
 function extractBareImageRefsFromText(value: string | null | undefined): ImageRef[] {
@@ -466,7 +493,7 @@ function extractBareImageRefsFromText(value: string | null | undefined): ImageRe
   const source = htmlToText(value) || value || "";
   for (const match of source.matchAll(/(?:https?:\/\/|\/|\.\.?\/)?[^\s<>"']+\.(?:png|jpe?g|gif|webp|svg)(?:[?#][^\s<>"']*)?/gi)) {
     const src = match[0].trim();
-    if (!src || !isImageUrlText(src)) continue;
+    if (!src || !isImageUrlText(src) || isBareImageFilename(src)) continue;
     refs.push({ src, key: src });
   }
   return refs;
@@ -478,7 +505,7 @@ function extractImageLinksFromHtml(html: string | null | undefined): ImageRef[] 
   for (const match of source.matchAll(/<\s*a\b[^>]*>/gi)) {
     const tag = match[0];
     const href = getAttr(tag, "href");
-    if (!href || !isImageUrlText(href)) continue;
+    if (!href || !isImageUrlText(href) || isBareImageFilename(href)) continue;
     refs.push({ src: href, alt: getAttr(tag, "title") || null, caption: getAttr(tag, "title") || null, key: href });
   }
   return refs;
@@ -493,7 +520,8 @@ function imageUrlsForExcel(...items: Array<{ html?: string | null; assets?: Expo
       assetImageRefs(item.assets),
     ]),
   );
-  return refs.map((ref) => ref.src).filter(Boolean).join("\n");
+  const urls = refs.flatMap((ref) => cleanImageUrlsForExcel(ref.src)).filter(Boolean);
+  return Array.from(new Set(urls)).join("\n");
 }
 
 function appendProCbtVersion(category: string, version: string) {
@@ -516,7 +544,7 @@ function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) 
       || question.blueprint.code;
     const proCbtCategory = appendProCbtVersion(baseCategory, params.procbtVersion);
     const material = plainText(blueprintVersion?.materialHtml) || plainText(blueprintVersion?.titleHtml) || plainText(blueprintVersion?.indicatorHtml) || question.blueprint.code;
-    const stimulusHtml = joinRichHtmlOrDot([
+    const stimulusHtml = joinRichHtmlOrEmpty([
       stimulusVersion?.instructionsHtml,
       stimulusVersion?.contentHtml,
     ]);
@@ -525,6 +553,11 @@ function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) 
       { html: stimulusVersion?.instructionsHtml },
       { html: stimulusVersion?.contentHtml, assets: stimulusVersion?.assets },
     );
+    const optionAImage = imageUrlsForExcel({ html: options.A?.contentHtml, assets: options.A?.assets });
+    const optionBImage = imageUrlsForExcel({ html: options.B?.contentHtml, assets: options.B?.assets });
+    const optionCImage = imageUrlsForExcel({ html: options.C?.contentHtml, assets: options.C?.assets });
+    const optionDImage = imageUrlsForExcel({ html: options.D?.contentHtml, assets: options.D?.assets });
+    const optionEImage = imageUrlsForExcel({ html: options.E?.contentHtml, assets: options.E?.assets });
 
     return [
       params.procbtProdi,
@@ -533,19 +566,19 @@ function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) 
       material,
       params.procbtTipe,
       proCbtCategory,
-      richHtmlOrDot(version?.stemHtml),
+      richHtmlForProCbtQuestion(version?.stemHtml, questionImage),
       stimulusHtml,
       questionImage,
-      richHtmlOrDot(options.A?.contentHtml),
-      imageUrlsForExcel({ html: options.A?.contentHtml, assets: options.A?.assets }),
-      richHtmlOrDot(options.B?.contentHtml),
-      imageUrlsForExcel({ html: options.B?.contentHtml, assets: options.B?.assets }),
-      richHtmlOrDot(options.C?.contentHtml),
-      imageUrlsForExcel({ html: options.C?.contentHtml, assets: options.C?.assets }),
-      richHtmlOrDot(options.D?.contentHtml),
-      imageUrlsForExcel({ html: options.D?.contentHtml, assets: options.D?.assets }),
-      richHtmlOrDot(options.E?.contentHtml),
-      imageUrlsForExcel({ html: options.E?.contentHtml, assets: options.E?.assets }),
+      richHtmlForProCbtOption(options.A?.contentHtml, optionAImage),
+      optionAImage,
+      richHtmlForProCbtOption(options.B?.contentHtml, optionBImage),
+      optionBImage,
+      richHtmlForProCbtOption(options.C?.contentHtml, optionCImage),
+      optionCImage,
+      richHtmlForProCbtOption(options.D?.contentHtml, optionDImage),
+      optionDImage,
+      richHtmlForProCbtOption(options.E?.contentHtml, optionEImage),
+      optionEImage,
       version?.answerKey || ".",
     ];
   });
