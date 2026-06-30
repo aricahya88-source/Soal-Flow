@@ -430,15 +430,46 @@ function isImageUrlText(value: string) {
   return /^(?:https?:\/\/|\/|\.\.?\/)?[^\s]+\.(?:png|jpe?g|gif|webp|svg)(?:[?#][^\s]*)?$/i.test(text);
 }
 
-function dotWhenEmpty(value: string | null | undefined) {
-  const text = plainText(value);
-  if (!text || isImageUrlText(text)) return ".";
-  return text;
+function stripImageReferencesFromHtml(html: string | null | undefined) {
+  let source = html ?? "";
+
+  source = source.replace(/<\s*img\b[^>]*>/gi, "");
+  source = source.replace(/<\s*a\b[^>]*>[\s\S]*?<\s*\/a\s*>/gi, (tag) => {
+    const href = getAttr(tag, "href");
+    return href && isImageUrlText(href) ? "" : tag;
+  });
+  source = source.replace(
+    /(?:https?:\/\/|\/|\.\.?\/)?[^\s<>"']+\.(?:png|jpe?g|gif|webp|svg)(?:[?#][^\s<>"']*)?/gi,
+    (url) => (isImageUrlText(url) ? "" : url),
+  );
+
+  return source
+    .replace(/<p[^>]*>(?:\s|&nbsp;|<\s*br\s*\/?\s*>)*<\s*\/p\s*>/gi, "")
+    .replace(/<div[^>]*>(?:\s|&nbsp;|<\s*br\s*\/?\s*>)*<\s*\/div\s*>/gi, "")
+    .trim();
 }
 
-function imageUrlFromText(value: string | null | undefined) {
-  const text = plainText(value);
-  return isImageUrlText(text) ? text : "";
+function richHtmlOrDot(html: string | null | undefined) {
+  const cleaned = stripImageReferencesFromHtml(html);
+  return htmlToText(cleaned) ? cleaned : ".";
+}
+
+function joinRichHtmlOrDot(values: Array<string | null | undefined>) {
+  const parts = values
+    .map((value) => stripImageReferencesFromHtml(value))
+    .filter((value) => htmlToText(value));
+  return parts.length ? parts.join("\n") : ".";
+}
+
+function extractBareImageRefsFromText(value: string | null | undefined): ImageRef[] {
+  const refs: ImageRef[] = [];
+  const source = htmlToText(value) || value || "";
+  for (const match of source.matchAll(/(?:https?:\/\/|\/|\.\.?\/)?[^\s<>"']+\.(?:png|jpe?g|gif|webp|svg)(?:[?#][^\s<>"']*)?/gi)) {
+    const src = match[0].trim();
+    if (!src || !isImageUrlText(src)) continue;
+    refs.push({ src, key: src });
+  }
+  return refs;
 }
 
 function extractImageLinksFromHtml(html: string | null | undefined): ImageRef[] {
@@ -453,9 +484,16 @@ function extractImageLinksFromHtml(html: string | null | undefined): ImageRef[] 
   return refs;
 }
 
-function firstImageUrl(html: string | null | undefined, assets?: ExportAssetLink[] | null) {
-  const refs = mergeImageRefs(extractImageRefsFromHtml(html), extractImageLinksFromHtml(html), assetImageRefs(assets));
-  return refs[0]?.src ?? imageUrlFromText(html);
+function imageUrlsForExcel(...items: Array<{ html?: string | null; assets?: ExportAssetLink[] | null }>) {
+  const refs = mergeImageRefs(
+    ...items.flatMap((item) => [
+      extractImageRefsFromHtml(item.html),
+      extractImageLinksFromHtml(item.html),
+      extractBareImageRefsFromText(item.html),
+      assetImageRefs(item.assets),
+    ]),
+  );
+  return refs.map((ref) => ref.src).filter(Boolean).join("\n");
 }
 
 function appendProCbtVersion(category: string, version: string) {
@@ -478,11 +516,15 @@ function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) 
       || question.blueprint.code;
     const proCbtCategory = appendProCbtVersion(baseCategory, params.procbtVersion);
     const material = plainText(blueprintVersion?.materialHtml) || plainText(blueprintVersion?.titleHtml) || plainText(blueprintVersion?.indicatorHtml) || question.blueprint.code;
-    const stimulusText = [plainText(stimulusVersion?.instructionsHtml), plainText(stimulusVersion?.contentHtml)]
-      .filter(Boolean)
-      .join(" ");
-    const questionImage = firstImageUrl(version?.stemHtml, version?.assets)
-      || firstImageUrl(stimulusVersion?.contentHtml, stimulusVersion?.assets);
+    const stimulusHtml = joinRichHtmlOrDot([
+      stimulusVersion?.instructionsHtml,
+      stimulusVersion?.contentHtml,
+    ]);
+    const questionImage = imageUrlsForExcel(
+      { html: version?.stemHtml, assets: version?.assets },
+      { html: stimulusVersion?.instructionsHtml },
+      { html: stimulusVersion?.contentHtml, assets: stimulusVersion?.assets },
+    );
 
     return [
       params.procbtProdi,
@@ -491,19 +533,19 @@ function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) 
       material,
       params.procbtTipe,
       proCbtCategory,
-      dotWhenEmpty(version?.stemHtml),
-      stimulusText,
+      richHtmlOrDot(version?.stemHtml),
+      stimulusHtml,
       questionImage,
-      dotWhenEmpty(options.A?.contentHtml),
-      firstImageUrl(options.A?.contentHtml, options.A?.assets),
-      dotWhenEmpty(options.B?.contentHtml),
-      firstImageUrl(options.B?.contentHtml, options.B?.assets),
-      dotWhenEmpty(options.C?.contentHtml),
-      firstImageUrl(options.C?.contentHtml, options.C?.assets),
-      dotWhenEmpty(options.D?.contentHtml),
-      firstImageUrl(options.D?.contentHtml, options.D?.assets),
-      dotWhenEmpty(options.E?.contentHtml),
-      firstImageUrl(options.E?.contentHtml, options.E?.assets),
+      richHtmlOrDot(options.A?.contentHtml),
+      imageUrlsForExcel({ html: options.A?.contentHtml, assets: options.A?.assets }),
+      richHtmlOrDot(options.B?.contentHtml),
+      imageUrlsForExcel({ html: options.B?.contentHtml, assets: options.B?.assets }),
+      richHtmlOrDot(options.C?.contentHtml),
+      imageUrlsForExcel({ html: options.C?.contentHtml, assets: options.C?.assets }),
+      richHtmlOrDot(options.D?.contentHtml),
+      imageUrlsForExcel({ html: options.D?.contentHtml, assets: options.D?.assets }),
+      richHtmlOrDot(options.E?.contentHtml),
+      imageUrlsForExcel({ html: options.E?.contentHtml, assets: options.E?.assets }),
       version?.answerKey || ".",
     ];
   });
