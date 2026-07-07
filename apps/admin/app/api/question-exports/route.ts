@@ -466,7 +466,6 @@ const PROCBT_HEADERS = [
 ] as const;
 
 const CBT_HEADERS = [
-  "nama",
   "no",
   "group_soal",
   "teks_group",
@@ -494,8 +493,9 @@ function plainText(value: string | null | undefined) {
   return htmlToText(value).replace(/\s+/g, " ").trim();
 }
 
-function cleanCbtOptionText(value: string | null | undefined) {
-  return plainText(value);
+function cbtCell(value: string | null | undefined) {
+  const clean = (value ?? "").trim();
+  return clean || null;
 }
 
 function cbtPackageText(question: ExportQuestion) {
@@ -730,38 +730,37 @@ function joinHtmlOrEmpty(values: Array<string | null | undefined>) {
   return parts.length ? parts.join("\n") : "";
 }
 
-function buildCbtWorkbook(params: ExportParams, questions: ExportQuestion[], packageLabel?: string) {
+function buildCbtWorkbook(_params: ExportParams, questions: ExportQuestion[], _packageLabel?: string) {
   const workbook = XLSX.utils.book_new();
-  const exportName = params.exportFilename.trim() || "Nama";
-  const nameValue = packageLabel ? `${exportName} - ${packageLabel}` : exportName;
   const rows = questions.map((question, index) => {
     const version = question.currentVersion;
     const stimulusVersion = question.stimulus?.currentVersion;
     const options = optionMap(question);
-    const stimulusHtml = joinHtmlOrEmpty([
-      stimulusVersion?.instructionsHtml,
-      stimulusVersion?.contentHtml,
-    ]);
     const isStimulusGroup = question.blueprint.currentVersion?.questionMode === "STIMULUS_GROUP";
+    const stimulusHtml = isStimulusGroup
+      ? cbtCell(joinHtmlOrEmpty([
+          stimulusVersion?.instructionsHtml,
+          stimulusVersion?.contentHtml,
+        ]))
+      : null;
     const groupCode = isStimulusGroup ? question.blueprint.code : question.code;
 
     return [
-      nameValue,
       index + 1,
       groupCode,
       stimulusHtml,
-      version?.stemHtml ?? "",
-      version?.answerKey ?? "",
-      cleanCbtOptionText(options.A),
-      cleanCbtOptionText(options.B),
-      cleanCbtOptionText(options.C),
-      cleanCbtOptionText(options.D),
-      cleanCbtOptionText(options.E),
+      cbtCell(version?.stemHtml),
+      cbtCell(version?.answerKey),
+      cbtCell(options.A),
+      cbtCell(options.B),
+      cbtCell(options.C),
+      cbtCell(options.D),
+      cbtCell(options.E),
     ];
   });
 
   const sheet = XLSX.utils.aoa_to_sheet(makeAoaExcelSafe([CBT_HEADERS as unknown as string[], ...rows]));
-  setWidths(sheet, [28, 8, 24, 80, 80, 18, 52, 52, 52, 52, 52]);
+  setWidths(sheet, [8, 28, 80, 80, 18, 52, 52, 52, 52, 52]);
   XLSX.utils.book_append_sheet(workbook, sheet, "Sheet1");
   return workbook;
 }
