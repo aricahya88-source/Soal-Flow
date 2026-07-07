@@ -11,7 +11,7 @@ import { db } from "@seleksi/database";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type ExportFormat = "xlsx" | "pdf" | "procbt";
+type ExportFormat = "xlsx" | "pdf" | "procbt" | "cbt";
 type ValidationFilter = "ALL" | "APPROVED" | "UNVALIDATED";
 type SelectionMode = "ALL" | "RANDOM_PER_BLUEPRINT";
 type ExportParams = {
@@ -26,6 +26,7 @@ type ExportParams = {
   procbtProdi: string;
   procbtTipe: string;
   procbtVersion: string;
+  exportFilename: string;
 };
 
 type ExportAssetLink = {
@@ -143,7 +144,7 @@ function checked(url: URL, name: string, fallback = false) {
 function readParams(request: Request): ExportParams {
   const url = new URL(request.url);
   const formatRaw = url.searchParams.get("format");
-  const format: ExportFormat = formatRaw === "pdf" || formatRaw === "procbt" ? formatRaw : "xlsx";
+  const format: ExportFormat = formatRaw === "pdf" || formatRaw === "procbt" || formatRaw === "cbt" ? formatRaw : "xlsx";
   const validationRaw = url.searchParams.get("validation") ?? "ALL";
   const selectionRaw = url.searchParams.get("selection") ?? "ALL";
 
@@ -162,6 +163,7 @@ function readParams(request: Request): ExportParams {
     procbtProdi: (url.searchParams.get("procbtProdi") ?? "").trim(),
     procbtTipe: (url.searchParams.get("procbtTipe") ?? "").trim(),
     procbtVersion: (url.searchParams.get("procbtVersion") ?? "").trim(),
+    exportFilename: (url.searchParams.get("exportFilename") ?? "").trim(),
   };
 }
 
@@ -408,6 +410,19 @@ const PROCBT_HEADERS = [
   "Jawaban",
 ] as const;
 
+const CBT_HEADERS = [
+  "no",
+  "group_soal",
+  "teks_group",
+  "text_soal",
+  "jawaban_benar",
+  "jawaban_A",
+  "jawaban_B",
+  "jawaban_C",
+  "jawaban_D",
+  "jawaban_E",
+] as const;
+
 type ExportQuestionOption = NonNullable<ExportQuestion["currentVersion"]>["options"][number];
 
 function optionObjectMap(question: ExportQuestion) {
@@ -529,6 +544,44 @@ function appendProCbtVersion(category: string, version: string) {
   const suffix = version.trim();
   if (!baseCategory || !suffix) return baseCategory;
   return baseCategory.endsWith(`-${suffix}`) ? baseCategory : `${baseCategory}-${suffix}`;
+}
+
+function joinHtmlOrEmpty(values: Array<string | null | undefined>) {
+  const parts = values
+    .map((value) => (value ?? "").trim())
+    .filter(Boolean);
+  return parts.length ? parts.join("\n") : "";
+}
+
+function buildCbtWorkbook(_params: ExportParams, questions: ExportQuestion[]) {
+  const workbook = XLSX.utils.book_new();
+  const rows = questions.map((question, index) => {
+    const version = question.currentVersion;
+    const stimulusVersion = question.stimulus?.currentVersion;
+    const options = optionMap(question);
+    const stimulusHtml = joinHtmlOrEmpty([
+      stimulusVersion?.instructionsHtml,
+      stimulusVersion?.contentHtml,
+    ]);
+
+    return [
+      index + 1,
+      question.code,
+      stimulusHtml,
+      version?.stemHtml ?? "",
+      version?.answerKey ?? "",
+      options.A ?? "",
+      options.B ?? "",
+      options.C ?? "",
+      options.D ?? "",
+      options.E ?? "",
+    ];
+  });
+
+  const sheet = XLSX.utils.aoa_to_sheet(makeAoaExcelSafe([CBT_HEADERS as unknown as string[], ...rows]));
+  setWidths(sheet, [8, 24, 80, 80, 18, 52, 52, 52, 52, 52]);
+  XLSX.utils.book_append_sheet(workbook, sheet, "Sheet1");
+  return workbook;
 }
 
 function buildProCbtWorkbook(params: ExportParams, questions: ExportQuestion[]) {
@@ -1331,17 +1384,31 @@ export async function GET(request: Request) {
   const params = readParams(request);
   const questions = await loadQuestions(params);
   const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
-  const baseFilename = safeFilename(`export-soal-${params.validation}-${params.selection}-${timestamp}`);
+  const baseFilename = safeFilename(params.exportFilename) || safeFilename(`export-soal-${params.validation}-${params.selection}-${timestamp}`);
 
   if (params.format === "procbt") {
     const workbook = buildProCbtWorkbook(params, questions);
     const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
-    const procbtFilename = safeFilename(`export-procbt-${params.procbtProdi || "prodi"}-${params.procbtTipe || "tipe"}-${params.procbtVersion || "versi"}-${timestamp}`);
+    const procbtFilename = safeFilename(params.exportFilename) || safeFilename(`export-procbt-${params.procbtProdi || "prodi"}-${params.procbtTipe || "tipe"}-${params.procbtVersion || "versi"}-${timestamp}`);
     return new NextResponse(buffer, {
       status: 200,
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${procbtFilename}.xlsx"`,
+        "Cache-Control": "private, no-store, max-age=0",
+      },
+    });
+  }
+
+  if (params.format === "cbt") {
+    const workbook = buildCbtWorkbook(params, questions);
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const cbtFilename = safeFilename(params.exportFilename) || safeFilename(`export-cbt-${params.validation}-${params.selection}-${timestamp}`);
+    return new NextResponse(buffer, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${cbtFilename}.xlsx"`,
         "Cache-Control": "private, no-store, max-age=0",
       },
     });
