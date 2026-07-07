@@ -14,6 +14,7 @@ export const runtime = "nodejs";
 type ExportFormat = "xlsx" | "pdf" | "procbt" | "cbt";
 type ValidationFilter = "ALL" | "APPROVED" | "UNVALIDATED";
 type SelectionMode = "ALL" | "RANDOM_PER_BLUEPRINT";
+type CbtPackageKey = "DASAR_PENALARAN" | "LITERASI_BIDANG" | "LITERASI_KEISLAMAN" | "LITERASI_BAHASA";
 type ExportParams = {
   format: ExportFormat;
   validation: ValidationFilter;
@@ -27,6 +28,7 @@ type ExportParams = {
   procbtTipe: string;
   procbtVersion: string;
   exportFilename: string;
+  cbtPackages: CbtPackageKey[];
 };
 
 type ExportAssetLink = {
@@ -129,6 +131,20 @@ const selectionLabels: Record<SelectionMode, string> = {
   RANDOM_PER_BLUEPRINT: "Random 1 soal pada setiap kisi-kisi; soal group diexport utuh",
 };
 
+const CBT_PACKAGES = [
+  { key: "DASAR_PENALARAN", label: "Dasar Penalaran", slug: "dasar-penalaran", codePatterns: [/^2026CBT-DP/i, /(?:^|[-_])DP\d/i], textPatterns: [/dasar\s+penalaran/i] },
+  { key: "LITERASI_BIDANG", label: "Literasi Bidang", slug: "literasi-bidang", codePatterns: [/^2026CBT-LB/i, /LBSains/i, /(?:^|[-_])LB\d/i], textPatterns: [/literasi\s+bidang/i, /literasi\s+bidang\s+sains/i] },
+  { key: "LITERASI_KEISLAMAN", label: "Literasi Dasar Pengetahuan Keislaman", slug: "literasi-dasar-pengetahuan-keislaman", codePatterns: [/^2026CBT-LI/i, /(?:^|[-_])LI\d/i], textPatterns: [/literasi\s+dasar\s+pengetahuan\s+keislaman/i, /pengetahuan\s+keislaman/i] },
+  { key: "LITERASI_BAHASA", label: "Literasi Bahasa", slug: "literasi-bahasa", codePatterns: [/^2026CBT-BI/i, /^2026CBT-BA/i, /(?:^|[-_])BI[A-Z]*/i, /(?:^|[-_])BA[A-Z]*/i], textPatterns: [/literasi\s+bahasa/i, /bahasa\s+inggris/i, /bahasa\s+arab/i] },
+] satisfies Array<{ key: CbtPackageKey; label: string; slug: string; codePatterns: RegExp[]; textPatterns: RegExp[] }>;
+
+function readCbtPackages(url: URL): CbtPackageKey[] {
+  const allowed = new Set<CbtPackageKey>(CBT_PACKAGES.map((item) => item.key));
+  return Array.from(new Set(url.searchParams.getAll("cbtPackage")
+    .map((value) => value.trim())
+    .filter((value): value is CbtPackageKey => allowed.has(value as CbtPackageKey))));
+}
+
 function readBlueprintCodes(url: URL) {
   return Array.from(new Set(url.searchParams.getAll("blueprintCode")
     .map((value) => value.trim())
@@ -164,6 +180,7 @@ function readParams(request: Request): ExportParams {
     procbtTipe: (url.searchParams.get("procbtTipe") ?? "").trim(),
     procbtVersion: (url.searchParams.get("procbtVersion") ?? "").trim(),
     exportFilename: (url.searchParams.get("exportFilename") ?? "").trim(),
+    cbtPackages: readCbtPackages(url),
   };
 }
 
@@ -445,6 +462,118 @@ function plainText(value: string | null | undefined) {
   return htmlToText(value).replace(/\s+/g, " ").trim();
 }
 
+function cleanCbtOptionText(value: string | null | undefined) {
+  return plainText(value);
+}
+
+function cbtPackageText(question: ExportQuestion) {
+  const version = question.blueprint.currentVersion;
+  return [
+    question.blueprint.code,
+    plainText(version?.titleHtml),
+    plainText(version?.testGroupHtml),
+    plainText(version?.testTopicHtml),
+    plainText(version?.competencyHtml),
+    plainText(version?.indicatorHtml),
+    plainText(version?.materialHtml),
+  ].filter(Boolean).join(" ");
+}
+
+function questionsForCbtPackage(questions: ExportQuestion[], packageKey: CbtPackageKey) {
+  const config = CBT_PACKAGES.find((item) => item.key === packageKey);
+  if (!config) return [];
+
+  return questions.filter((question) => {
+    const code = question.blueprint.code;
+    const text = cbtPackageText(question);
+    return config.codePatterns.some((pattern) => pattern.test(code))
+      || config.textPatterns.some((pattern) => pattern.test(text));
+  });
+}
+
+function cbtPackageSlug(packageKey: CbtPackageKey) {
+  return CBT_PACKAGES.find((item) => item.key === packageKey)?.slug ?? safeFilename(packageKey);
+}
+
+type ZipEntry = { filename: string; data: Buffer };
+
+const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+  }
+  return value >>> 0;
+});
+
+function crc32(buffer: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createZipBuffer(entries: ZipEntry[]) {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const nameBuffer = Buffer.from(entry.filename, "utf8");
+    const data = entry.data;
+    const checksum = crc32(data);
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0x0800, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(0, 10);
+    localHeader.writeUInt16LE(0, 12);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(data.length, 18);
+    localHeader.writeUInt32LE(data.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, nameBuffer, data);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0x0800, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(0, 12);
+    centralHeader.writeUInt16LE(0, 14);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(data.length, 20);
+    centralHeader.writeUInt32LE(data.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+
+    offset += localHeader.length + nameBuffer.length + data.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
 function isImageUrlText(value: string) {
   const text = value.trim();
   if (!text) return false;
@@ -579,11 +708,11 @@ function buildCbtWorkbook(_params: ExportParams, questions: ExportQuestion[]) {
       stimulusHtml,
       version?.stemHtml ?? "",
       version?.answerKey ?? "",
-      options.A ?? "",
-      options.B ?? "",
-      options.C ?? "",
-      options.D ?? "",
-      options.E ?? "",
+      cleanCbtOptionText(options.A),
+      cleanCbtOptionText(options.B),
+      cleanCbtOptionText(options.C),
+      cleanCbtOptionText(options.D),
+      cleanCbtOptionText(options.E),
     ];
   });
 
@@ -1410,9 +1539,32 @@ export async function GET(request: Request) {
   }
 
   if (params.format === "cbt") {
+    const cbtFilename = safeFilename(params.exportFilename) || safeFilename(`export-cbt-${params.validation}-${params.selection}-${timestamp}`);
+
+    if (params.cbtPackages.length) {
+      const entries = params.cbtPackages.map((packageKey) => {
+        const packageQuestions = questionsForCbtPackage(questions, packageKey);
+        const workbook = buildCbtWorkbook(params, packageQuestions);
+        const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+        return {
+          filename: `${cbtFilename}-${cbtPackageSlug(packageKey)}.xlsx`,
+          data: buffer,
+        };
+      });
+      const buffer = createZipBuffer(entries);
+
+      return new NextResponse(buffer, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": `attachment; filename="${cbtFilename}-paket.zip"`,
+          "Cache-Control": "private, no-store, max-age=0",
+        },
+      });
+    }
+
     const workbook = buildCbtWorkbook(params, questions);
     const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
-    const cbtFilename = safeFilename(params.exportFilename) || safeFilename(`export-cbt-${params.validation}-${params.selection}-${timestamp}`);
     return new NextResponse(buffer, {
       status: 200,
       headers: {
