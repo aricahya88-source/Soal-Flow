@@ -498,6 +498,19 @@ function cbtCell(value: string | null | undefined) {
   return clean || null;
 }
 
+function cbtOptionCell(value: string | null | undefined) {
+  const clean = (value ?? "").trim();
+  if (!clean) return null;
+
+  const withoutParagraphWrapper = clean
+    .replace(/^\s*<p(?:\s[^>]*)?>/i, "")
+    .replace(/<\/p>\s*$/i, "")
+    .replace(/<\/p>\s*<p(?:\s[^>]*)?>/gi, "\n")
+    .trim();
+
+  return withoutParagraphWrapper || null;
+}
+
 function cbtPackageText(question: ExportQuestion) {
   const version = question.blueprint.currentVersion;
   return [
@@ -751,11 +764,11 @@ function buildCbtWorkbook(_params: ExportParams, questions: ExportQuestion[], _p
       stimulusHtml,
       cbtCell(version?.stemHtml),
       cbtCell(version?.answerKey),
-      cbtCell(options.A),
-      cbtCell(options.B),
-      cbtCell(options.C),
-      cbtCell(options.D),
-      cbtCell(options.E),
+      cbtOptionCell(options.A),
+      cbtOptionCell(options.B),
+      cbtOptionCell(options.C),
+      cbtOptionCell(options.D),
+      cbtOptionCell(options.E),
     ];
   });
 
