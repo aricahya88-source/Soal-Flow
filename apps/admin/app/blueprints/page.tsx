@@ -17,8 +17,9 @@ import {
 import { requireActionUser, requirePageUser } from "@/lib/auth";
 import { paginationWindow, parsePage, parsePageSize } from "@/lib/pagination";
 import { db } from "@seleksi/database";
+import { type Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { ChevronDown, Pencil, Plus } from "lucide-react";
+import { ChevronDown, Pencil, Plus, Search } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -316,16 +317,21 @@ async function deleteBlueprint(formData: FormData) {
   revalidatePath("/");
 }
 
-type PageProps = { searchParams?: Promise<{ page?: string; size?: string }> };
+type PageProps = { searchParams?: Promise<{ page?: string; size?: string; q?: string }> };
 
 export default async function BlueprintsPage({ searchParams }: PageProps) {
   await requirePageUser(["BLUEPRINT_AUTHOR", "SUPER_ADMIN"]);
   await ensureAllQuestionSlots();
   const params = await searchParams;
-  const totalRows = await db.blueprint.count();
+  const query = (params?.q ?? "").trim();
+  const blueprintWhere: Prisma.BlueprintWhereInput = query
+    ? { code: { contains: query, mode: "insensitive" } }
+    : {};
+  const totalRows = await db.blueprint.count({ where: blueprintWhere });
   const pagination = paginationWindow(totalRows, parsePage(params?.page), parsePageSize(params?.size));
 
   const rows = await db.blueprint.findMany({
+    where: blueprintWhere,
     orderBy: [{ createdAt: "desc" }, { code: "desc" }],
     skip: pagination.skip,
     ...(pagination.take ? { take: pagination.take } : {}),
@@ -374,6 +380,33 @@ export default async function BlueprintsPage({ searchParams }: PageProps) {
           <BlueprintForm action={createBlueprint} />
         </div>
       </details>
+
+      <form className="card panel" action="/blueprints" method="get" style={{ marginBottom: 20 }}>
+        <input type="hidden" name="size" value={String(pagination.pageSize)} />
+        <label className="field-block" style={{ marginBottom: 0 }}>
+          <span className="field-label">Search kode kisi-kisi</span>
+          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr auto auto" }}>
+            <div style={{ position: "relative" }}>
+              <Search size={16} style={{ left: 12, position: "absolute", top: 13 }} />
+              <input
+                className="text-input"
+                type="search"
+                name="q"
+                defaultValue={query}
+                placeholder="Contoh: KK-0001"
+                style={{ paddingLeft: 38 }}
+              />
+            </div>
+            <button className="primary-button" type="submit">Cari</button>
+            {query ? <a className="secondary-button" href="/blueprints">Reset</a> : null}
+          </div>
+        </label>
+        {query ? (
+          <p className="muted-text" style={{ marginBottom: 0, marginTop: 8 }}>
+            Hasil pencarian kode kisi-kisi: <strong>{query}</strong>
+          </p>
+        ) : null}
+      </form>
 
       <section className="card panel blueprint-list-panel">
         <div className="panel-heading blueprint-list-heading">
@@ -634,9 +667,11 @@ export default async function BlueprintsPage({ searchParams }: PageProps) {
                 <tr>
                   <td colSpan={5}>
                     <div className="empty-state">
-                      <p>Belum ada kisi-kisi.</p>
+                      <p>{query ? "Kode kisi-kisi tidak ditemukan." : "Belum ada kisi-kisi."}</p>
                       <span>
-                        Tambahkan kisi-kisi untuk membuat slot soal otomatis.
+                        {query
+                          ? "Tidak ada kode kisi-kisi yang cocok dengan pencarian tersebut."
+                          : "Tambahkan kisi-kisi untuk membuat slot soal otomatis."}
                       </span>
                     </div>
                   </td>
@@ -654,6 +689,7 @@ export default async function BlueprintsPage({ searchParams }: PageProps) {
           from={pagination.from}
           to={pagination.to}
           itemLabel="kisi-kisi"
+          params={{ q: query || undefined }}
         />
       </section>
 

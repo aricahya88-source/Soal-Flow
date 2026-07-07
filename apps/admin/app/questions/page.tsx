@@ -12,6 +12,7 @@ import {
 import { requireActionUser, requirePageUser } from "@/lib/auth";
 import { paginationWindow, parsePage, parsePageSize } from "@/lib/pagination";
 import { db } from "@seleksi/database";
+import { type Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import {
   ChevronDown,
@@ -19,6 +20,7 @@ import {
   CircleDashed,
   FilePlus2,
   Pencil,
+  Search,
   Send,
   ShieldCheck,
 } from "lucide-react";
@@ -340,13 +342,14 @@ async function submitBlueprintQuestions(formData: FormData) {
   revalidatePath("/");
 }
 
-type PageProps = { searchParams?: Promise<{ page?: string; size?: string }> };
+type PageProps = { searchParams?: Promise<{ page?: string; size?: string; q?: string }> };
 
 export default async function QuestionsPage({ searchParams }: PageProps) {
   const user = await requirePageUser(["QUESTION_AUTHOR", "SUPER_ADMIN"]);
   await ensureAllQuestionSlots();
   const canSeeAll = user.roles.includes("SUPER_ADMIN");
   const params = await searchParams;
+  const query = (params?.q ?? "").trim();
 
   const assignments = await db.questionWritingAssignment.findMany({
     where: { assignedToId: user.id, status: { not: "CANCELLED" } },
@@ -361,7 +364,19 @@ export default async function QuestionsPage({ searchParams }: PageProps) {
     orderBy: { updatedAt: "desc" },
   });
   const assignedBlueprintIds = assignments.map((item) => item.blueprintId);
-  const questionWhere = canSeeAll ? {} : { blueprintId: { in: assignedBlueprintIds } };
+  const questionWhere: Prisma.QuestionWhereInput = {
+    ...(query
+      ? {
+          blueprint: {
+            code: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+        }
+      : {}),
+    ...(canSeeAll ? {} : { blueprintId: { in: assignedBlueprintIds } }),
+  };
   const totalQuestions = await db.question.count({ where: questionWhere });
   const pagination = paginationWindow(totalQuestions, parsePage(params?.page), parsePageSize(params?.size));
 
@@ -442,6 +457,33 @@ export default async function QuestionsPage({ searchParams }: PageProps) {
           </span>
         </div>
       </div>
+
+      <form className="card panel" action="/questions" method="get" style={{ marginBottom: 20 }}>
+        <input type="hidden" name="size" value={String(pagination.pageSize)} />
+        <label className="field-block" style={{ marginBottom: 0 }}>
+          <span className="field-label">Search kode kisi-kisi</span>
+          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr auto auto" }}>
+            <div style={{ position: "relative" }}>
+              <Search size={16} style={{ left: 12, position: "absolute", top: 13 }} />
+              <input
+                className="text-input"
+                type="search"
+                name="q"
+                defaultValue={query}
+                placeholder="Contoh: KK-0001"
+                style={{ paddingLeft: 38 }}
+              />
+            </div>
+            <button className="primary-button" type="submit">Cari</button>
+            {query ? <a className="secondary-button" href="/questions">Reset</a> : null}
+          </div>
+        </label>
+        {query ? (
+          <p className="muted-text" style={{ marginBottom: 0, marginTop: 8 }}>
+            Hasil pencarian kode kisi-kisi: <strong>{query}</strong>
+          </p>
+        ) : null}
+      </form>
 
       {groups.length ? (
         <section className="question-groups">
@@ -759,15 +801,17 @@ export default async function QuestionsPage({ searchParams }: PageProps) {
             from={pagination.from}
             to={pagination.to}
             itemLabel="soal"
+            params={{ q: query || undefined }}
           />
         </section>
       ) : (
         <section className="card panel empty-workspace">
           <FilePlus2 size={36} />
-          <h3>Belum ada plotting kisi-kisi</h3>
+          <h3>{query ? "Kode kisi-kisi tidak ditemukan" : "Belum ada plotting kisi-kisi"}</h3>
           <p className="muted-text">
-            Admin atau super admin perlu menugaskan kode kisi-kisi kepada
-            penulis soal terlebih dahulu.
+            {query
+              ? "Tidak ada kode kisi-kisi yang cocok dengan pencarian tersebut."
+              : "Admin atau super admin perlu menugaskan kode kisi-kisi kepada penulis soal terlebih dahulu."}
           </p>
         </section>
       )}
