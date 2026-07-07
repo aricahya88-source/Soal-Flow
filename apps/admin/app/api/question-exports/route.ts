@@ -126,7 +126,7 @@ const validationLabels: Record<ValidationFilter, string> = {
 
 const selectionLabels: Record<SelectionMode, string> = {
   ALL: "Seluruh soal sesuai filter",
-  RANDOM_PER_BLUEPRINT: "Random 1 soal pada setiap kisi-kisi",
+  RANDOM_PER_BLUEPRINT: "Random 1 soal pada setiap kisi-kisi; soal group diexport utuh",
 };
 
 function readBlueprintCodes(url: URL) {
@@ -240,9 +240,16 @@ function selectRandomPerBlueprint(questions: ExportQuestion[]) {
     groups.set(question.blueprint.id, current);
   }
 
-  return Array.from(groups.values()).map((group) => {
+  return Array.from(groups.values()).flatMap((group) => {
+    const firstQuestion = group[0];
+    const isStimulusGroup = firstQuestion?.blueprint.currentVersion?.questionMode === "STIMULUS_GROUP";
+
+    if (isStimulusGroup) {
+      return group;
+    }
+
     const index = Math.floor(Math.random() * group.length);
-    return group[index];
+    return [group[index]];
   });
 }
 
@@ -563,10 +570,12 @@ function buildCbtWorkbook(_params: ExportParams, questions: ExportQuestion[]) {
       stimulusVersion?.instructionsHtml,
       stimulusVersion?.contentHtml,
     ]);
+    const isStimulusGroup = question.blueprint.currentVersion?.questionMode === "STIMULUS_GROUP";
+    const groupCode = isStimulusGroup ? question.blueprint.code : question.code;
 
     return [
       index + 1,
-      question.code,
+      groupCode,
       stimulusHtml,
       version?.stemHtml ?? "",
       version?.answerKey ?? "",

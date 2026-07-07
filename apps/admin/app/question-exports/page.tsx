@@ -168,7 +168,7 @@ export default async function QuestionExportsPage() {
               <span className="field-label">Pola export</span>
               <select className="select-input" name="selection" defaultValue="ALL">
                 <option value="ALL">Seluruh soal sesuai filter</option>
-                <option value="RANDOM_PER_BLUEPRINT">Random 1 soal pada setiap kisi-kisi</option>
+                <option value="RANDOM_PER_BLUEPRINT">Random 1 soal pada setiap kisi-kisi, soal group ikut utuh</option>
               </select>
             </label>
           </div>
