@@ -29,6 +29,8 @@ type ExportParams = {
   procbtVersion: string;
   exportFilename: string;
   cbtPackages: CbtPackageKey[];
+  cbtBlueprintCodesByPackage: Record<CbtPackageKey, string[]>;
+  hasCbtBlueprintSelection: boolean;
 };
 
 type ExportAssetLink = {
@@ -133,7 +135,7 @@ const selectionLabels: Record<SelectionMode, string> = {
 
 const CBT_PACKAGES = [
   { key: "DASAR_PENALARAN", label: "Dasar Penalaran", slug: "dasar-penalaran", codePatterns: [/^2026CBT-DP/i, /(?:^|[-_])DP\d/i], textPatterns: [/dasar\s+penalaran/i] },
-  { key: "LITERASI_BIDANG", label: "Literasi Bidang", slug: "literasi-bidang", codePatterns: [/^2026CBT-LB/i, /LBSains/i, /(?:^|[-_])LB\d/i], textPatterns: [/literasi\s+bidang/i, /literasi\s+bidang\s+sains/i] },
+  { key: "LITERASI_BIDANG", label: "Literasi Bidang", slug: "literasi-bidang", codePatterns: [/^2026CBT-LB/i, /LBSains/i, /LBSos/i, /(?:^|[-_])LB\d/i], textPatterns: [/literasi\s+bidang/i, /literasi\s+bidang\s+sains/i, /literasi\s+sosial/i] },
   { key: "LITERASI_KEISLAMAN", label: "Literasi Dasar Pengetahuan Keislaman", slug: "literasi-dasar-pengetahuan-keislaman", codePatterns: [/^2026CBT-LI/i, /(?:^|[-_])LI\d/i], textPatterns: [/literasi\s+dasar\s+pengetahuan\s+keislaman/i, /pengetahuan\s+keislaman/i] },
   { key: "LITERASI_BAHASA", label: "Literasi Bahasa", slug: "literasi-bahasa", codePatterns: [/^2026CBT-BI/i, /^2026CBT-BA/i, /(?:^|[-_])BI[A-Z]*/i, /(?:^|[-_])BA[A-Z]*/i], textPatterns: [/literasi\s+bahasa/i, /bahasa\s+inggris/i, /bahasa\s+arab/i] },
 ] satisfies Array<{ key: CbtPackageKey; label: string; slug: string; codePatterns: RegExp[]; textPatterns: RegExp[] }>;
@@ -143,6 +145,21 @@ function readCbtPackages(url: URL): CbtPackageKey[] {
   return Array.from(new Set(url.searchParams.getAll("cbtPackage")
     .map((value) => value.trim())
     .filter((value): value is CbtPackageKey => allowed.has(value as CbtPackageKey))));
+}
+
+function readCbtBlueprintCodesByPackage(url: URL): Record<CbtPackageKey, string[]> {
+  return Object.fromEntries(
+    CBT_PACKAGES.map((item) => [
+      item.key,
+      Array.from(new Set(url.searchParams.getAll(`cbtBlueprint_${item.key}`)
+        .map((value) => value.trim())
+        .filter(Boolean))),
+    ]),
+  ) as Record<CbtPackageKey, string[]>;
+}
+
+function cbtBlueprintUnion(params: ExportParams) {
+  return Array.from(new Set(Object.values(params.cbtBlueprintCodesByPackage).flat()));
 }
 
 function readBlueprintCodes(url: URL) {
@@ -181,6 +198,8 @@ function readParams(request: Request): ExportParams {
     procbtVersion: (url.searchParams.get("procbtVersion") ?? "").trim(),
     exportFilename: (url.searchParams.get("exportFilename") ?? "").trim(),
     cbtPackages: readCbtPackages(url),
+    cbtBlueprintCodesByPackage: readCbtBlueprintCodesByPackage(url),
+    hasCbtBlueprintSelection: url.searchParams.get("cbtBlueprintSelection") === "1",
   };
 }
 
@@ -241,7 +260,10 @@ function buildWhere(params: ExportParams) {
     where.status = { not: "APPROVED" };
   }
 
-  if (params.blueprintCodes.length) {
+  const selectedCbtBlueprintCodes = params.format === "cbt" ? cbtBlueprintUnion(params) : [];
+  if (params.format === "cbt" && selectedCbtBlueprintCodes.length) {
+    where.blueprint = { code: { in: selectedCbtBlueprintCodes } };
+  } else if (params.blueprintCodes.length) {
     where.blueprint = { code: { in: params.blueprintCodes } };
   }
 
@@ -435,6 +457,7 @@ const PROCBT_HEADERS = [
 ] as const;
 
 const CBT_HEADERS = [
+  "nama",
   "no",
   "group_soal",
   "teks_group",
@@ -479,9 +502,14 @@ function cbtPackageText(question: ExportQuestion) {
   ].filter(Boolean).join(" ");
 }
 
-function questionsForCbtPackage(questions: ExportQuestion[], packageKey: CbtPackageKey) {
+function questionsForCbtPackage(questions: ExportQuestion[], packageKey: CbtPackageKey, params?: ExportParams) {
   const config = CBT_PACKAGES.find((item) => item.key === packageKey);
   if (!config) return [];
+
+  if (params?.hasCbtBlueprintSelection) {
+    const selectedCodes = new Set(params.cbtBlueprintCodesByPackage[packageKey] ?? []);
+    return questions.filter((question) => selectedCodes.has(question.blueprint.code));
+  }
 
   return questions.filter((question) => {
     const code = question.blueprint.code;
@@ -489,6 +517,10 @@ function questionsForCbtPackage(questions: ExportQuestion[], packageKey: CbtPack
     return config.codePatterns.some((pattern) => pattern.test(code))
       || config.textPatterns.some((pattern) => pattern.test(text));
   });
+}
+
+function cbtPackageLabel(packageKey: CbtPackageKey) {
+  return CBT_PACKAGES.find((item) => item.key === packageKey)?.label ?? packageKey;
 }
 
 function cbtPackageSlug(packageKey: CbtPackageKey) {
@@ -689,8 +721,10 @@ function joinHtmlOrEmpty(values: Array<string | null | undefined>) {
   return parts.length ? parts.join("\n") : "";
 }
 
-function buildCbtWorkbook(_params: ExportParams, questions: ExportQuestion[]) {
+function buildCbtWorkbook(params: ExportParams, questions: ExportQuestion[], packageLabel?: string) {
   const workbook = XLSX.utils.book_new();
+  const exportName = params.exportFilename.trim() || "Nama";
+  const nameValue = packageLabel ? `${exportName} - ${packageLabel}` : exportName;
   const rows = questions.map((question, index) => {
     const version = question.currentVersion;
     const stimulusVersion = question.stimulus?.currentVersion;
@@ -703,6 +737,7 @@ function buildCbtWorkbook(_params: ExportParams, questions: ExportQuestion[]) {
     const groupCode = isStimulusGroup ? question.blueprint.code : question.code;
 
     return [
+      nameValue,
       index + 1,
       groupCode,
       stimulusHtml,
@@ -717,7 +752,7 @@ function buildCbtWorkbook(_params: ExportParams, questions: ExportQuestion[]) {
   });
 
   const sheet = XLSX.utils.aoa_to_sheet(makeAoaExcelSafe([CBT_HEADERS as unknown as string[], ...rows]));
-  setWidths(sheet, [8, 24, 80, 80, 18, 52, 52, 52, 52, 52]);
+  setWidths(sheet, [28, 8, 24, 80, 80, 18, 52, 52, 52, 52, 52]);
   XLSX.utils.book_append_sheet(workbook, sheet, "Sheet1");
   return workbook;
 }
@@ -1543,8 +1578,9 @@ export async function GET(request: Request) {
 
     if (params.cbtPackages.length) {
       const entries = params.cbtPackages.map((packageKey) => {
-        const packageQuestions = questionsForCbtPackage(questions, packageKey);
-        const workbook = buildCbtWorkbook(params, packageQuestions);
+        const packageLabel = cbtPackageLabel(packageKey);
+        const packageQuestions = questionsForCbtPackage(questions, packageKey, params);
+        const workbook = buildCbtWorkbook(params, packageQuestions, packageLabel);
         const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
         return {
           filename: `${cbtFilename}-${cbtPackageSlug(packageKey)}.xlsx`,

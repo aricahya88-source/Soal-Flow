@@ -205,7 +205,7 @@ export default async function QuestionExportsPage() {
             <button className="secondary-button" type="submit" name="format" value="pdf">
               <FileText size={17} /> Export PDF
             </button>
-            <CbtExportDialog />
+            <CbtExportDialog blueprints={blueprintOptions} />
             <ProCbtExportDialog />
           </div>
         </section>

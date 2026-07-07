@@ -10,7 +10,7 @@ import { paginationWindow, parsePage, parsePageSize } from "@/lib/pagination";
 import { db } from "@seleksi/database";
 import { ContentStatus, ValidationTaskStatus, type Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { BookOpenText, CheckCircle2, ChevronDown, Pencil, RotateCcw, ShieldCheck, XCircle } from "lucide-react";
+import { BookOpenText, CheckCircle2, ChevronDown, Pencil, RotateCcw, Search, ShieldCheck, XCircle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -229,12 +229,13 @@ async function validateStimulus(formData: FormData) {
   revalidatePath("/");
 }
 
-type PageProps = { searchParams?: Promise<{ page?: string; size?: string }> };
+type PageProps = { searchParams?: Promise<{ page?: string; size?: string; q?: string }> };
 
 export default async function ReviewsPage({ searchParams }: PageProps) {
   const user = await requirePageUser(["QUESTION_VALIDATOR", "SUPER_ADMIN"]);
   const canSeeAll = user.roles.includes("SUPER_ADMIN");
   const params = await searchParams;
+  const query = (params?.q ?? "").trim();
   const reviewStatuses: ContentStatus[] = [
     ContentStatus.SUBMITTED,
     ContentStatus.IN_REVIEW,
@@ -246,6 +247,14 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
 
   const reviewWhere: Prisma.QuestionWhereInput = {
     status: { in: reviewStatuses },
+    ...(query
+      ? {
+          code: {
+            contains: query,
+            mode: "insensitive",
+          },
+        }
+      : {}),
     ...(canSeeAll
       ? {}
       : {
@@ -336,6 +345,33 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
           </span>
         </div>
       </div>
+
+      <form className="card panel" action="/reviews" method="get" style={{ marginBottom: 20 }}>
+        <input type="hidden" name="size" value={String(pagination.pageSize)} />
+        <label className="field-block" style={{ marginBottom: 0 }}>
+          <span className="field-label">Search kode soal</span>
+          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr auto auto" }}>
+            <div style={{ position: "relative" }}>
+              <Search size={16} style={{ left: 12, position: "absolute", top: 13 }} />
+              <input
+                className="text-input"
+                type="search"
+                name="q"
+                defaultValue={query}
+                placeholder="Contoh: 2026CBT-LBSains28-028-S05"
+                style={{ paddingLeft: 38 }}
+              />
+            </div>
+            <button className="primary-button" type="submit">Cari</button>
+            {query ? <a className="secondary-button" href="/reviews">Reset</a> : null}
+          </div>
+        </label>
+        {query ? (
+          <p className="muted-text" style={{ marginBottom: 0, marginTop: 8 }}>
+            Hasil pencarian kode soal: <strong>{query}</strong>
+          </p>
+        ) : null}
+      </form>
 
       <section className="review-groups">
         {groups.map((group) => {
@@ -640,15 +676,17 @@ export default async function ReviewsPage({ searchParams }: PageProps) {
             from={pagination.from}
             to={pagination.to}
             itemLabel="soal"
+            params={{ q: query || undefined }}
           />
         ) : null}
         {!groups.length ? (
           <section className="card panel empty-workspace">
             <ShieldCheck size={36} />
-            <h3>Belum ada kelompok yang dikirim</h3>
+            <h3>{query ? "Kode soal tidak ditemukan" : "Belum ada kelompok yang dikirim"}</h3>
             <p className="muted-text">
-              Soal akan muncul setelah penulis mengirim satu kelompok kode
-              kisi-kisi.
+              {query
+                ? "Tidak ada soal yang cocok dengan kode soal yang dicari."
+                : "Soal akan muncul setelah penulis mengirim satu kelompok kode kisi-kisi."}
             </p>
           </section>
         ) : null}
