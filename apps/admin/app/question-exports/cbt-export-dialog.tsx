@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, FileSpreadsheet, ListChecks, X } from "lucide-react";
 
+type ValidationFilter = "ALL" | "APPROVED" | "UNVALIDATED";
+
 type BlueprintOption = {
   id: string;
   code: string;
@@ -67,6 +69,31 @@ function emptySelection(): SelectedByPackage {
   };
 }
 
+function getBlueprintCount(blueprint: BlueprintOption, validation: ValidationFilter) {
+  if (validation === "APPROVED") return blueprint.approvedCount;
+  if (validation === "UNVALIDATED") return blueprint.unvalidatedCount;
+  return blueprint.allCount;
+}
+
+function validationLabel(validation: ValidationFilter) {
+  if (validation === "APPROVED") return "soal tervalidasi";
+  if (validation === "UNVALIDATED") return "soal belum tervalidasi";
+  return "semua status soal";
+}
+
+function readValidationFromForm(): ValidationFilter {
+  const value = document.querySelector<HTMLSelectElement>('select[name="validation"]')?.value;
+  if (value === "ALL" || value === "UNVALIDATED") return value;
+  return "APPROVED";
+}
+
+function readSelectedBlueprintCodesFromForm() {
+  return Array.from(document.querySelectorAll<HTMLInputElement>('input[name="blueprintCode"]'))
+    .map((input) => input.value.trim())
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index);
+}
+
 function blueprintSearchText(blueprint: BlueprintOption) {
   return [blueprint.code, blueprint.title, blueprint.group, blueprint.mode]
     .filter(Boolean)
@@ -115,12 +142,44 @@ function totalSelected(selectedByPackage: SelectedByPackage) {
   return Object.values(selectedByPackage).reduce((sum, codes) => sum + codes.length, 0);
 }
 
+function statusBlueprintsFor(blueprints: BlueprintOption[], validation: ValidationFilter) {
+  return blueprints.filter((blueprint) => getBlueprintCount(blueprint, validation) > 0);
+}
+
+function candidateBlueprintsFor(blueprints: BlueprintOption[], validation: ValidationFilter, selectedCodes: string[]) {
+  const statusBlueprints = statusBlueprintsFor(blueprints, validation);
+  if (!selectedCodes.length) return statusBlueprints;
+
+  const selectedSet = new Set(selectedCodes);
+  return statusBlueprints.filter((blueprint) => selectedSet.has(blueprint.code));
+}
+
 export function CbtExportDialog({ blueprints }: Props) {
   const [isOpen, setIsOpen] = useState(false);
-  const packageBlueprints = useMemo(() => buildPackageBlueprints(blueprints), [blueprints]);
-  const defaultSelection = useMemo(() => buildDefaultSelection(blueprints), [blueprints]);
-  const [selectedByPackage, setSelectedByPackage] = useState<SelectedByPackage>(() => defaultSelection);
+  const [validation, setValidation] = useState<ValidationFilter>("APPROVED");
+  const [selectedBlueprintCodes, setSelectedBlueprintCodes] = useState<string[]>([]);
+
+  const statusBlueprints = useMemo(() => statusBlueprintsFor(blueprints, validation), [blueprints, validation]);
+  const availableBlueprints = useMemo(
+    () => candidateBlueprintsFor(blueprints, validation, selectedBlueprintCodes),
+    [blueprints, validation, selectedBlueprintCodes],
+  );
+  const packageBlueprints = useMemo(() => buildPackageBlueprints(availableBlueprints), [availableBlueprints]);
+  const defaultSelection = useMemo(() => buildDefaultSelection(availableBlueprints), [availableBlueprints]);
+  const [selectedByPackage, setSelectedByPackage] = useState<SelectedByPackage>(() => emptySelection());
   const selectedCount = totalSelected(selectedByPackage);
+  const hasMainBlueprintSelection = selectedBlueprintCodes.length > 0;
+
+  function openDialog() {
+    const nextValidation = readValidationFromForm();
+    const nextSelectedCodes = readSelectedBlueprintCodesFromForm();
+    const nextBlueprints = candidateBlueprintsFor(blueprints, nextValidation, nextSelectedCodes);
+
+    setValidation(nextValidation);
+    setSelectedBlueprintCodes(nextSelectedCodes);
+    setSelectedByPackage(buildDefaultSelection(nextBlueprints));
+    setIsOpen(true);
+  }
 
   function resetToDefaultSelection() {
     setSelectedByPackage(defaultSelection);
@@ -165,7 +224,7 @@ export function CbtExportDialog({ blueprints }: Props) {
 
   return (
     <>
-      <button className="primary-button" type="button" onClick={() => setIsOpen(true)}>
+      <button className="primary-button" type="button" onClick={openDialog}>
         <FileSpreadsheet size={17} /> Export CBT
       </button>
 
@@ -201,7 +260,7 @@ export function CbtExportDialog({ blueprints }: Props) {
               <div>
                 <h3 id="cbt-export-title" style={{ marginTop: 0 }}>Export CBT</h3>
                 <p className="muted-text" style={{ marginBottom: 0 }}>
-                  Isi nama file export, lalu buka paket untuk mengatur ceklis kode kisi-kisi. Sistem akan menghasilkan ZIP berisi 4 Excel: Dasar Penalaran, Literasi Bidang, Literasi Dasar Pengetahuan Keislaman, dan Literasi Bahasa.
+                  Kisi-kisi di bawah mengikuti pilihan pada bagian Export berdasarkan kisi-kisi yang dipilih. Sistem tetap menghasilkan ZIP berisi 4 Excel: Dasar Penalaran, Literasi Bidang, Literasi Dasar Pengetahuan Keislaman, dan Literasi Bahasa.
                 </p>
               </div>
               <button className="secondary-button compact-button" type="button" onClick={() => setIsOpen(false)} aria-label="Tutup export CBT">
@@ -220,12 +279,20 @@ export function CbtExportDialog({ blueprints }: Props) {
 
             <section className="card soft-card form-grid">
               <div>
-                <strong><ListChecks size={16} style={{ verticalAlign: "text-bottom" }} /> Ceklis kisi-kisi semua soal</strong>
+                <strong><ListChecks size={16} style={{ verticalAlign: "text-bottom" }} /> Export berdasarkan kisi-kisi yang dipilih</strong>
                 <p className="muted-text" style={{ marginBottom: 0 }}>
-                  Setiap paket default hide. Kode kisi-kisi yang sudah dicentang pada satu paket akan terkunci pada paket lain agar tidak masuk dua Excel sekaligus.
+                  Kisi-kisi yang tampil sudah mengikuti pilihan <strong>Status soal</strong> di atas. Bila tidak ada kisi-kisi yang dicentang, sistem otomatis mengekspor semua kisi-kisi sesuai status soal dan pola export.
                 </p>
                 <p className="muted-text" style={{ marginBottom: 0, marginTop: 4 }}>
-                  Terpilih: <strong>{number(selectedCount)}</strong> kisi-kisi.
+                  Terpilih: <strong>{number(hasMainBlueprintSelection ? selectedBlueprintCodes.length : 0)}</strong> kisi-kisi dari {number(statusBlueprints.length)} kisi-kisi yang memiliki {validationLabel(validation)}.
+                </p>
+                <p className="muted-text" style={{ marginBottom: 0, marginTop: 4 }}>
+                  {hasMainBlueprintSelection
+                    ? `Export CBT hanya menampilkan ${number(availableBlueprints.length)} kisi-kisi yang dicentang dan masih memiliki soal sesuai status.`
+                    : `Belum ada kisi-kisi dicentang, sehingga daftar paket memakai semua ${number(availableBlueprints.length)} kisi-kisi sesuai status.`}
+                </p>
+                <p className="muted-text" style={{ marginBottom: 0, marginTop: 4 }}>
+                  Checklist paket default hide. Kode kisi-kisi yang sudah dicentang pada satu paket akan terkunci pada paket lain agar tidak masuk dua Excel sekaligus.
                 </p>
               </div>
               <div className="package-action-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
@@ -279,14 +346,14 @@ export function CbtExportDialog({ blueprints }: Props) {
                               <span>
                                 <strong>{blueprint.code}</strong> — {blueprint.title || "Tanpa judul"}
                                 <small className="muted-text" style={{ display: "block" }}>
-                                  {blueprint.group ? `${blueprint.group} · ` : ""}{blueprint.mode || "Mode soal belum diisi"} · {number(blueprint.approvedCount)} soal approved / {number(blueprint.allCount)} total
+                                  {blueprint.group ? `${blueprint.group} · ` : ""}{blueprint.mode || "Mode soal belum diisi"} · {number(getBlueprintCount(blueprint, validation))} soal sesuai status
                                   {lockedByOtherPackage ? ` · sudah dipilih di ${owner}` : ""}
                                 </small>
                               </span>
                             </label>
                           );
                         }) : (
-                          <p className="muted-text">Belum ada kisi-kisi yang terdeteksi untuk paket ini.</p>
+                          <p className="muted-text">Belum ada kisi-kisi yang terdeteksi untuk paket ini dari pilihan kisi-kisi/status soal saat ini.</p>
                         )}
                       </div>
                     </div>

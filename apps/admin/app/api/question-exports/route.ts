@@ -180,6 +180,8 @@ function readParams(request: Request): ExportParams {
   const format: ExportFormat = formatRaw === "pdf" || formatRaw === "procbt" || formatRaw === "cbt" ? formatRaw : "xlsx";
   const validationRaw = url.searchParams.get("validation") ?? "ALL";
   const selectionRaw = url.searchParams.get("selection") ?? "ALL";
+  const cbtBlueprintCodesByPackage = readCbtBlueprintCodesByPackage(url);
+  const hasCbtBlueprintSelection = Object.values(cbtBlueprintCodesByPackage).some((codes) => codes.length > 0);
 
   return {
     format,
@@ -198,8 +200,8 @@ function readParams(request: Request): ExportParams {
     procbtVersion: (url.searchParams.get("procbtVersion") ?? "").trim(),
     exportFilename: (url.searchParams.get("exportFilename") ?? "").trim(),
     cbtPackages: readCbtPackages(url),
-    cbtBlueprintCodesByPackage: readCbtBlueprintCodesByPackage(url),
-    hasCbtBlueprintSelection: url.searchParams.get("cbtBlueprintSelection") === "1",
+    cbtBlueprintCodesByPackage,
+    hasCbtBlueprintSelection,
   };
 }
 
@@ -338,14 +340,21 @@ async function loadQuestions(params: ExportParams): Promise<ExportQuestion[]> {
   return sortQuestions(selected);
 }
 
+function effectiveBlueprintCodesForSummary(params: ExportParams) {
+  const cbtCodes = params.format === "cbt" ? cbtBlueprintUnion(params) : [];
+  return cbtCodes.length ? cbtCodes : params.blueprintCodes;
+}
+
 function buildSummaryRows(params: ExportParams, questions: ExportQuestion[]) {
+  const selectedBlueprintCodes = effectiveBlueprintCodesForSummary(params);
+
   return [
     ["SOALFLOW — EXPORT SOAL"],
     [],
     ["Tanggal export", dateTime(new Date())],
     ["Status validasi", validationLabels[params.validation]],
     ["Mode export", selectionLabels[params.selection]],
-    ["Kisi-kisi dipilih", params.blueprintCodes.length ? params.blueprintCodes.join(", ") : "Semua kisi-kisi"],
+    ["Kisi-kisi dipilih", selectedBlueprintCodes.length ? selectedBlueprintCodes.join(", ") : "Semua kisi-kisi"],
     ["Jumlah soal", questions.length],
     ["Jumlah kisi-kisi", new Set(questions.map((question) => question.blueprint.code)).size],
   ];
@@ -1483,7 +1492,8 @@ async function buildPdf(params: ExportParams, questions: ExportQuestion[]) {
   pdf.line(`Tanggal export: ${dateTime(new Date())}`, 10);
   pdf.line(`Status validasi: ${validationLabels[params.validation]}`, 10);
   pdf.line(`Mode export: ${selectionLabels[params.selection]}`, 10);
-  pdf.line(`Kisi-kisi dipilih: ${params.blueprintCodes.length ? params.blueprintCodes.join(", ") : "Semua kisi-kisi"}`, 10);
+  const selectedBlueprintCodes = effectiveBlueprintCodesForSummary(params);
+  pdf.line(`Kisi-kisi dipilih: ${selectedBlueprintCodes.length ? selectedBlueprintCodes.join(", ") : "Semua kisi-kisi"}`, 10);
   pdf.line(`Jumlah soal: ${questions.length}`, 10);
   pdf.line(`Jumlah kisi-kisi: ${new Set(questions.map((question) => question.blueprint.code)).size}`, 10);
   pdf.gap(12);
