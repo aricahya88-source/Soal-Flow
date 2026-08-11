@@ -1,17 +1,25 @@
-PATCH EXPORT PENULIS SOAL + VALIDATOR
+SOALFLOW — PATCH EXPORT PDF RAPI + NAMA PENULIS/VALIDATOR
 
-Isi paket:
-1. export-penulis-validator.patch
-2. File source yang sudah berubah, dengan struktur folder repository yang sama.
+Patch ini KUMULATIF dan sudah mencakup:
+- Menu Export Soal untuk Penulis Soal dan Validator.
+- Pembatasan export hanya pada soal yang ditugaskan kepada user terkait.
+- PDF lebih rapi: header/footer konsisten, page-break lebih baik, opsi A-E hanging indent, gambar dipusatkan.
+- Metadata kisi-kisi tidak diulang pada setiap soal.
+- Stimulus yang sama pada satu kelompok tidak dicetak berulang pada setiap soal.
+- Nama Penulis Soal dan Validator ditampilkan pada PDF.
+- Nama Penulis Soal dan Validator ditambahkan pada export Excel standar (Data Soal HTML dan Versi Teks).
+- Beberapa simbol matematika umum tidak lagi hilang; dikonversi ke representasi ASCII yang aman untuk renderer PDF saat ini.
 
-Cara paling aman:
-- Jika memakai Git lokal:
-  git apply export-penulis-validator.patch
+UNTUK GITHUB WEB (disarankan jika Anda biasa drag & drop):
+1. Ekstrak ZIP ini.
+2. Upload/ganti 4 file di folder apps/... ke lokasi yang sama di repository Anda.
+3. Commit perubahan.
 
-- Jika memakai GitHub Web:
-  GitHub tidak otomatis menerapkan file .patch saat di-drag & drop.
-  Gunakan file source di folder apps/... dalam ZIP ini untuk mengganti file yang sama
-  di repository, lalu commit perubahan.
+UNTUK GIT LOKAL dari baseline project ZIP awal:
+  git apply soalflow-export-pdf-rapi.patch
+
+Catatan:
+- File .patch dibuat terhadap baseline ZIP awal yang Anda kirim. Jika patch sebelumnya sudah diterapkan, lebih aman gunakan file source di folder apps/... dalam paket ini (overwrite file yang sama), bukan git apply patch kumulatif.
 
 File yang berubah:
 - apps/admin/components/admin-shell-client.tsx
