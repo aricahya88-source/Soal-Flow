@@ -6,7 +6,9 @@ import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccess } from "@/lib/access";
+import { questionExportAccessWhere, QUESTION_EXPORT_ROLES } from "@/lib/question-export-access";
 import { db } from "@seleksi/database";
+import type { Prisma } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -253,24 +255,26 @@ function optionMap(question: ExportQuestion) {
   ) as Record<string, string | undefined>;
 }
 
-function buildWhere(params: ExportParams) {
-  const where: any = { currentVersionId: { not: null } };
+function buildWhere(params: ExportParams, accessWhere: Prisma.QuestionWhereInput) {
+  const conditions: Prisma.QuestionWhereInput[] = [
+    { currentVersionId: { not: null } },
+    accessWhere,
+  ];
 
   if (params.validation === "APPROVED") {
-    where.status = "APPROVED";
+    conditions.push({ status: "APPROVED" });
   } else if (params.validation === "UNVALIDATED") {
-    where.status = { not: "APPROVED" };
+    conditions.push({ status: { not: "APPROVED" } });
   }
 
   const selectedCbtBlueprintCodes = params.format === "cbt" ? cbtBlueprintUnion(params) : [];
   if (params.format === "cbt" && selectedCbtBlueprintCodes.length) {
-    where.blueprint = { code: { in: selectedCbtBlueprintCodes } };
+    conditions.push({ blueprint: { code: { in: selectedCbtBlueprintCodes } } });
   } else if (params.blueprintCodes.length) {
-    where.blueprint = { code: { in: params.blueprintCodes } };
+    conditions.push({ blueprint: { code: { in: params.blueprintCodes } } });
   }
 
-
-  return where;
+  return { AND: conditions } satisfies Prisma.QuestionWhereInput;
 }
 
 function selectRandomPerBlueprint(questions: ExportQuestion[]) {
@@ -305,9 +309,9 @@ function sortQuestions(questions: ExportQuestion[]) {
   });
 }
 
-async function loadQuestions(params: ExportParams): Promise<ExportQuestion[]> {
+async function loadQuestions(params: ExportParams, accessWhere: Prisma.QuestionWhereInput): Promise<ExportQuestion[]> {
   const questions = await db.question.findMany({
-    where: buildWhere(params),
+    where: buildWhere(params, accessWhere),
     orderBy: [{ blueprint: { code: "asc" } }, { code: "asc" }],
     include: {
       blueprint: { include: { currentVersion: true } },
@@ -1572,12 +1576,13 @@ async function buildPdf(params: ExportParams, questions: ExportQuestion[]) {
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
-  if (!canAccess(user.roles, ["EXAM_ADMIN", "SUPER_ADMIN"])) {
+  if (!canAccess(user.roles, [...QUESTION_EXPORT_ROLES])) {
     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
   }
 
   const params = readParams(request);
-  const questions = await loadQuestions(params);
+  const accessWhere = questionExportAccessWhere(user);
+  const questions = await loadQuestions(params, accessWhere);
   const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
   const baseFilename = safeFilename(params.exportFilename) || safeFilename(`export-soal-${params.validation}-${params.selection}-${timestamp}`);
 

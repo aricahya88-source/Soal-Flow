@@ -40,7 +40,7 @@ const menu: MenuItem[] = [
   { href: "/questions", label: "Tulis Soal", icon: FileQuestion, roles: ["QUESTION_AUTHOR", "SUPER_ADMIN"] },
   { href: "/reviews", label: "Validasi Soal", icon: ShieldCheck, roles: ["QUESTION_VALIDATOR", "SUPER_ADMIN"] },
   { href: "/packages", label: "Buat Paket", icon: PackageCheck, roles: ["EXAM_ADMIN", "SUPER_ADMIN"] },
-  { href: "/question-exports", label: "Export Soal", icon: FileDown, roles: ["EXAM_ADMIN", "SUPER_ADMIN"] },
+  { href: "/question-exports", label: "Export Soal", icon: FileDown, roles: ["QUESTION_AUTHOR", "QUESTION_VALIDATOR", "EXAM_ADMIN", "SUPER_ADMIN"] },
   { href: "/analytics", label: "Nilai & Parameter Soal", icon: BarChart3, roles: ["EXAM_ADMIN", "SUPER_ADMIN"] },
   { href: "/imports", label: "Upload Kisi-kisi & Soal", icon: UploadCloud, roles: ["SUPER_ADMIN"] },
   { href: "/users", label: "User", icon: Users, roles: ["SUPER_ADMIN"] },

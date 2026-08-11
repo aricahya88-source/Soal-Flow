@@ -1,0 +1,270 @@
+--- a/apps/admin/components/admin-shell-client.tsx
++++ b/apps/admin/components/admin-shell-client.tsx
+@@ -40,7 +40,7 @@
+   { href: "/questions", label: "Tulis Soal", icon: FileQuestion, roles: ["QUESTION_AUTHOR", "SUPER_ADMIN"] },
+   { href: "/reviews", label: "Validasi Soal", icon: ShieldCheck, roles: ["QUESTION_VALIDATOR", "SUPER_ADMIN"] },
+   { href: "/packages", label: "Buat Paket", icon: PackageCheck, roles: ["EXAM_ADMIN", "SUPER_ADMIN"] },
+-  { href: "/question-exports", label: "Export Soal", icon: FileDown, roles: ["EXAM_ADMIN", "SUPER_ADMIN"] },
++  { href: "/question-exports", label: "Export Soal", icon: FileDown, roles: ["QUESTION_AUTHOR", "QUESTION_VALIDATOR", "EXAM_ADMIN", "SUPER_ADMIN"] },
+   { href: "/analytics", label: "Nilai & Parameter Soal", icon: BarChart3, roles: ["EXAM_ADMIN", "SUPER_ADMIN"] },
+   { href: "/imports", label: "Upload Kisi-kisi & Soal", icon: UploadCloud, roles: ["SUPER_ADMIN"] },
+   { href: "/users", label: "User", icon: Users, roles: ["SUPER_ADMIN"] },
+--- a/apps/admin/app/question-exports/page.tsx
++++ b/apps/admin/app/question-exports/page.tsx
+@@ -1,6 +1,8 @@
+ import { AdminShell } from "@/components/admin-shell";
+ import { requirePageUser } from "@/lib/auth";
++import { blueprintExportAccessWhere, questionExportAccessWhere, QUESTION_EXPORT_ROLES } from "@/lib/question-export-access";
+ import { db } from "@seleksi/database";
++import type { Prisma } from "@prisma/client";
+ import {
+   CheckCircle2,
+   FileDown,
+@@ -44,7 +46,28 @@
+ }
+ 
+ export default async function QuestionExportsPage() {
+-  await requirePageUser(["EXAM_ADMIN", "SUPER_ADMIN"]);
++  const user = await requirePageUser([...QUESTION_EXPORT_ROLES]);
++  const questionAccessWhere = questionExportAccessWhere(user);
++  const blueprintAccessWhere = blueprintExportAccessWhere(user);
++
++  const activeQuestionWhere: Prisma.QuestionWhereInput = {
++    AND: [
++      { currentVersionId: { not: null } },
++      questionAccessWhere,
++    ],
++  };
++  const approvedQuestionWhere: Prisma.QuestionWhereInput = {
++    AND: [
++      activeQuestionWhere,
++      { status: "APPROVED" },
++    ],
++  };
++  const activeBlueprintWhere: Prisma.BlueprintWhereInput = {
++    AND: [
++      { currentVersionId: { not: null } },
++      blueprintAccessWhere,
++    ],
++  };
+ 
+   const [
+     totalQuestions,
+@@ -54,11 +77,11 @@
+     questionCountsByBlueprint,
+     approvedQuestionCountsByBlueprint,
+   ] = await Promise.all([
+-    db.question.count({ where: { currentVersionId: { not: null } } }),
+-    db.question.count({ where: { currentVersionId: { not: null }, status: "APPROVED" } }),
+-    db.blueprint.count({ where: { currentVersionId: { not: null } } }),
++    db.question.count({ where: activeQuestionWhere }),
++    db.question.count({ where: approvedQuestionWhere }),
++    db.blueprint.count({ where: activeBlueprintWhere }),
+     db.blueprint.findMany({
+-      where: { currentVersionId: { not: null } },
++      where: activeBlueprintWhere,
+       orderBy: { code: "asc" },
+       select: {
+         id: true,
+@@ -75,12 +98,12 @@
+     }),
+     db.question.groupBy({
+       by: ["blueprintId"],
+-      where: { currentVersionId: { not: null } },
++      where: activeQuestionWhere,
+       _count: { _all: true },
+     }),
+     db.question.groupBy({
+       by: ["blueprintId"],
+-      where: { currentVersionId: { not: null }, status: "APPROVED" },
++      where: approvedQuestionWhere,
+       _count: { _all: true },
+     }),
+   ]);
+@@ -112,14 +135,14 @@
+   return (
+     <AdminShell
+       title="Export Soal"
+-      subtitle="Export bank soal ke Excel HTML, Excel CBT, Excel ProCBT, atau PDF siap baca"
+-      allowedRoles={["EXAM_ADMIN", "SUPER_ADMIN"]}
++      subtitle="Export soal sesuai cakupan tugas ke Excel HTML, Excel CBT, Excel ProCBT, atau PDF siap baca"
++      allowedRoles={[...QUESTION_EXPORT_ROLES]}
+     >
+       <div className="page-header">
+         <div>
+           <h2>Pengaturan export bank soal</h2>
+           <p>
+-            Pilih status validasi, pola pengambilan soal, opsi isi PDF, dan kisi-kisi tertentu bila diperlukan.
++            Pilih status validasi, pola pengambilan soal, opsi isi PDF, dan kisi-kisi tertentu bila diperlukan. Soal yang tersedia mengikuti tugas user yang sedang login.
+           </p>
+         </div>
+         <span className="badge">Export Soal</span>
+--- a/apps/admin/app/api/question-exports/route.ts
++++ b/apps/admin/app/api/question-exports/route.ts
+@@ -6,7 +6,9 @@
+ import * as XLSX from "xlsx";
+ import { getCurrentUser } from "@/lib/auth";
+ import { canAccess } from "@/lib/access";
++import { questionExportAccessWhere, QUESTION_EXPORT_ROLES } from "@/lib/question-export-access";
+ import { db } from "@seleksi/database";
++import type { Prisma } from "@prisma/client";
+ 
+ export const dynamic = "force-dynamic";
+ export const runtime = "nodejs";
+@@ -253,24 +255,26 @@
+   ) as Record<string, string | undefined>;
+ }
+ 
+-function buildWhere(params: ExportParams) {
+-  const where: any = { currentVersionId: { not: null } };
++function buildWhere(params: ExportParams, accessWhere: Prisma.QuestionWhereInput) {
++  const conditions: Prisma.QuestionWhereInput[] = [
++    { currentVersionId: { not: null } },
++    accessWhere,
++  ];
+ 
+   if (params.validation === "APPROVED") {
+-    where.status = "APPROVED";
++    conditions.push({ status: "APPROVED" });
+   } else if (params.validation === "UNVALIDATED") {
+-    where.status = { not: "APPROVED" };
++    conditions.push({ status: { not: "APPROVED" } });
+   }
+ 
+   const selectedCbtBlueprintCodes = params.format === "cbt" ? cbtBlueprintUnion(params) : [];
+   if (params.format === "cbt" && selectedCbtBlueprintCodes.length) {
+-    where.blueprint = { code: { in: selectedCbtBlueprintCodes } };
++    conditions.push({ blueprint: { code: { in: selectedCbtBlueprintCodes } } });
+   } else if (params.blueprintCodes.length) {
+-    where.blueprint = { code: { in: params.blueprintCodes } };
+-  }
+-
+-
+-  return where;
++    conditions.push({ blueprint: { code: { in: params.blueprintCodes } } });
++  }
++
++  return { AND: conditions } satisfies Prisma.QuestionWhereInput;
+ }
+ 
+ function selectRandomPerBlueprint(questions: ExportQuestion[]) {
+@@ -305,9 +309,9 @@
+   });
+ }
+ 
+-async function loadQuestions(params: ExportParams): Promise<ExportQuestion[]> {
++async function loadQuestions(params: ExportParams, accessWhere: Prisma.QuestionWhereInput): Promise<ExportQuestion[]> {
+   const questions = await db.question.findMany({
+-    where: buildWhere(params),
++    where: buildWhere(params, accessWhere),
+     orderBy: [{ blueprint: { code: "asc" } }, { code: "asc" }],
+     include: {
+       blueprint: { include: { currentVersion: true } },
+@@ -1572,12 +1576,13 @@
+ export async function GET(request: Request) {
+   const user = await getCurrentUser();
+   if (!user) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+-  if (!canAccess(user.roles, ["EXAM_ADMIN", "SUPER_ADMIN"])) {
++  if (!canAccess(user.roles, [...QUESTION_EXPORT_ROLES])) {
+     return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+   }
+ 
+   const params = readParams(request);
+-  const questions = await loadQuestions(params);
++  const accessWhere = questionExportAccessWhere(user);
++  const questions = await loadQuestions(params, accessWhere);
+   const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+   const baseFilename = safeFilename(params.exportFilename) || safeFilename(`export-soal-${params.validation}-${params.selection}-${timestamp}`);
+ 
+--- /dev/null
++++ b/apps/admin/lib/question-export-access.ts
+@@ -0,0 +1,89 @@
++import type { Prisma } from "@prisma/client";
++import type { CurrentUser } from "@/lib/auth";
++
++export const QUESTION_EXPORT_ROLES = [
++  "QUESTION_AUTHOR",
++  "QUESTION_VALIDATOR",
++  "EXAM_ADMIN",
++  "SUPER_ADMIN",
++] as const;
++
++export function questionExportAccessWhere(user: Pick<CurrentUser, "id" | "roles">): Prisma.QuestionWhereInput {
++  if (user.roles.includes("SUPER_ADMIN") || user.roles.includes("EXAM_ADMIN")) {
++    return {};
++  }
++
++  const scopes: Prisma.QuestionWhereInput[] = [];
++
++  if (user.roles.includes("QUESTION_AUTHOR")) {
++    scopes.push({
++      blueprint: {
++        writingAssignments: {
++          some: {
++            assignedToId: user.id,
++            status: { not: "CANCELLED" },
++          },
++        },
++      },
++    });
++  }
++
++  if (user.roles.includes("QUESTION_VALIDATOR")) {
++    scopes.push({
++      validationAssignments: {
++        some: {
++          assignedToId: user.id,
++          status: { not: "CANCELLED" },
++        },
++      },
++    });
++  }
++
++  if (!scopes.length) {
++    return { id: "__NO_EXPORT_ACCESS__" };
++  }
++
++  if (scopes.length === 1) return scopes[0];
++  return { OR: scopes };
++}
++
++export function blueprintExportAccessWhere(user: Pick<CurrentUser, "id" | "roles">): Prisma.BlueprintWhereInput {
++  if (user.roles.includes("SUPER_ADMIN") || user.roles.includes("EXAM_ADMIN")) {
++    return {};
++  }
++
++  const scopes: Prisma.BlueprintWhereInput[] = [];
++
++  if (user.roles.includes("QUESTION_AUTHOR")) {
++    scopes.push({
++      writingAssignments: {
++        some: {
++          assignedToId: user.id,
++          status: { not: "CANCELLED" },
++        },
++      },
++    });
++  }
++
++  if (user.roles.includes("QUESTION_VALIDATOR")) {
++    scopes.push({
++      questions: {
++        some: {
++          validationAssignments: {
++            some: {
++              assignedToId: user.id,
++              status: { not: "CANCELLED" },
++            },
++          },
++        },
++      },
++    });
++  }
++
++  if (!scopes.length) {
++    return { id: "__NO_EXPORT_ACCESS__" };
++  }
++
++  if (scopes.length === 1) return scopes[0];
++  return { OR: scopes };
++}

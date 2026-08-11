@@ -1,6 +1,8 @@
 import { AdminShell } from "@/components/admin-shell";
 import { requirePageUser } from "@/lib/auth";
+import { blueprintExportAccessWhere, questionExportAccessWhere, QUESTION_EXPORT_ROLES } from "@/lib/question-export-access";
 import { db } from "@seleksi/database";
+import type { Prisma } from "@prisma/client";
 import {
   CheckCircle2,
   FileDown,
@@ -44,7 +46,28 @@ function htmlToText(html: string | null | undefined) {
 }
 
 export default async function QuestionExportsPage() {
-  await requirePageUser(["EXAM_ADMIN", "SUPER_ADMIN"]);
+  const user = await requirePageUser([...QUESTION_EXPORT_ROLES]);
+  const questionAccessWhere = questionExportAccessWhere(user);
+  const blueprintAccessWhere = blueprintExportAccessWhere(user);
+
+  const activeQuestionWhere: Prisma.QuestionWhereInput = {
+    AND: [
+      { currentVersionId: { not: null } },
+      questionAccessWhere,
+    ],
+  };
+  const approvedQuestionWhere: Prisma.QuestionWhereInput = {
+    AND: [
+      activeQuestionWhere,
+      { status: "APPROVED" },
+    ],
+  };
+  const activeBlueprintWhere: Prisma.BlueprintWhereInput = {
+    AND: [
+      { currentVersionId: { not: null } },
+      blueprintAccessWhere,
+    ],
+  };
 
   const [
     totalQuestions,
@@ -54,11 +77,11 @@ export default async function QuestionExportsPage() {
     questionCountsByBlueprint,
     approvedQuestionCountsByBlueprint,
   ] = await Promise.all([
-    db.question.count({ where: { currentVersionId: { not: null } } }),
-    db.question.count({ where: { currentVersionId: { not: null }, status: "APPROVED" } }),
-    db.blueprint.count({ where: { currentVersionId: { not: null } } }),
+    db.question.count({ where: activeQuestionWhere }),
+    db.question.count({ where: approvedQuestionWhere }),
+    db.blueprint.count({ where: activeBlueprintWhere }),
     db.blueprint.findMany({
-      where: { currentVersionId: { not: null } },
+      where: activeBlueprintWhere,
       orderBy: { code: "asc" },
       select: {
         id: true,
@@ -75,12 +98,12 @@ export default async function QuestionExportsPage() {
     }),
     db.question.groupBy({
       by: ["blueprintId"],
-      where: { currentVersionId: { not: null } },
+      where: activeQuestionWhere,
       _count: { _all: true },
     }),
     db.question.groupBy({
       by: ["blueprintId"],
-      where: { currentVersionId: { not: null }, status: "APPROVED" },
+      where: approvedQuestionWhere,
       _count: { _all: true },
     }),
   ]);
@@ -112,14 +135,14 @@ export default async function QuestionExportsPage() {
   return (
     <AdminShell
       title="Export Soal"
-      subtitle="Export bank soal ke Excel HTML, Excel CBT, Excel ProCBT, atau PDF siap baca"
-      allowedRoles={["EXAM_ADMIN", "SUPER_ADMIN"]}
+      subtitle="Export soal sesuai cakupan tugas ke Excel HTML, Excel CBT, Excel ProCBT, atau PDF siap baca"
+      allowedRoles={[...QUESTION_EXPORT_ROLES]}
     >
       <div className="page-header">
         <div>
           <h2>Pengaturan export bank soal</h2>
           <p>
-            Pilih status validasi, pola pengambilan soal, opsi isi PDF, dan kisi-kisi tertentu bila diperlukan.
+            Pilih status validasi, pola pengambilan soal, opsi isi PDF, dan kisi-kisi tertentu bila diperlukan. Soal yang tersedia mengikuti tugas user yang sedang login.
           </p>
         </div>
         <span className="badge">Export Soal</span>
