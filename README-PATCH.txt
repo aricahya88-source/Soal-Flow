@@ -1,28 +1,31 @@
-SOALFLOW — PATCH EXPORT PDF RAPI + NAMA PENULIS/VALIDATOR
+PATCH PDF ARAB / RTL - SoalFlow
 
-Patch ini KUMULATIF dan sudah mencakup:
-- Menu Export Soal untuk Penulis Soal dan Validator.
-- Pembatasan export hanya pada soal yang ditugaskan kepada user terkait.
-- PDF lebih rapi: header/footer konsisten, page-break lebih baik, opsi A-E hanging indent, gambar dipusatkan.
-- Metadata kisi-kisi tidak diulang pada setiap soal.
-- Stimulus yang sama pada satu kelompok tidak dicetak berulang pada setiap soal.
-- Nama Penulis Soal dan Validator ditampilkan pada PDF.
-- Nama Penulis Soal dan Validator ditambahkan pada export Excel standar (Data Soal HTML dan Versi Teks).
-- Beberapa simbol matematika umum tidak lagi hilang; dikonversi ke representasi ASCII yang aman untuk renderer PDF saat ini.
+Fokus patch ini hanya export PDF.
 
-UNTUK GITHUB WEB (disarankan jika Anda biasa drag & drop):
-1. Ekstrak ZIP ini.
-2. Upload/ganti 4 file di folder apps/... ke lokasi yang sama di repository Anda.
-3. Commit perubahan.
+Perubahan:
+- Teks Arab pada stimulus, stem soal, opsi, kisi-kisi, dan pembahasan tidak lagi dibuang.
+- PDF yang mengandung aksara Arab otomatis memakai pdfmake-rtl + font Cairo.
+- Arabic RTL/right alignment dan teks campuran Arab/Latin ditangani oleh renderer RTL.
+- PDF tanpa aksara Arab tetap memakai renderer lama agar layout Latin tidak berubah.
+- Nama Penulis Soal dan Validator dari patch sebelumnya tetap tampil.
+- Font Cairo dari dependency ikut ditrace untuk deployment Next.js/Vercel.
 
-UNTUK GIT LOKAL dari baseline project ZIP awal:
-  git apply soalflow-export-pdf-rapi.patch
+FILE YANG DIGANTI:
+1. apps/admin/app/api/question-exports/route.ts
+2. apps/admin/package.json
+3. apps/admin/next.config.mjs
+
+GITHUB WEB / DRAG-DROP:
+- Extract ZIP ini.
+- Upload/replace 3 file di atas ke path yang sama pada repository.
+- Commit.
+- Vercel akan menjalankan npm install dan memasang dependency pdfmake-rtl dari package.json.
+
+GIT LOKAL (opsional):
+- git apply patch-pdf-arab-rtl.patch
+- npm install
+- commit package-lock.json bila Anda ingin lockfile ikut diperbarui untuk penggunaan npm ci lokal.
 
 Catatan:
-- File .patch dibuat terhadap baseline ZIP awal yang Anda kirim. Jika patch sebelumnya sudah diterapkan, lebih aman gunakan file source di folder apps/... dalam paket ini (overwrite file yang sama), bukan git apply patch kumulatif.
-
-File yang berubah:
-- apps/admin/components/admin-shell-client.tsx
-- apps/admin/app/question-exports/page.tsx
-- apps/admin/app/api/question-exports/route.ts
-- apps/admin/lib/question-export-access.ts
+- node_modules dan file font tidak perlu di-upload ke GitHub.
+- Patch dibuat terhadap versi patch sebelumnya: export PDF rapi + nama Penulis/Validator.

@@ -18,7 +18,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "@seleksi/database": "*",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "pdfmake-rtl": "^2.1.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

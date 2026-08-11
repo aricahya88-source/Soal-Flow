@@ -1,0 +1,334 @@
+--- a/apps/admin/app/api/question-exports/route.ts
++++ b/apps/admin/app/api/question-exports/route.ts
+@@ -1650,7 +1650,7 @@
+     + (stimulusVersion.source ? 16 : 0);
+ }
+ 
+-async function buildPdf(params: ExportParams, questions: ExportQuestion[]) {
++async function buildLegacyPdf(params: ExportParams, questions: ExportQuestion[]) {
+   const pdf = new SimplePdf();
+   pdf.heading("SOALFLOW - EXPORT SOAL", 16);
+   pdf.line("Dokumen bank soal yang dibuat otomatis oleh SoalFlow.", 10);
+@@ -1746,6 +1746,283 @@
+   return pdf.build();
+ }
+ 
++
++type PdfMakeNode = Record<string, any>;
++
++const ARABIC_SCRIPT_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
++
++function containsArabic(value: string | null | undefined) {
++  return ARABIC_SCRIPT_RE.test(value ?? "");
++}
++
++function pdfMakeText(
++  value: string | null | undefined,
++  options: PdfMakeNode = {},
++): PdfMakeNode {
++  const text = String(value ?? "");
++  const arabic = containsArabic(text);
++  return {
++    text,
++    font: arabic ? "Cairo" : "Roboto",
++    alignment: arabic ? "right" : options.alignment,
++    ...(arabic ? { rtl: true } : {}),
++    ...options,
++    ...(arabic && options.alignment == null ? { alignment: "right" } : {}),
++  };
++}
++
++function pdfMakeLabelValue(label: string, value: string | null | undefined, marginBottom = 2): PdfMakeNode[] {
++  const text = htmlToText(value);
++  if (!text) return [];
++  return [
++    pdfMakeText(label, { bold: true, fontSize: 9, margin: [0, 0, 0, 1] }),
++    pdfMakeText(text, { fontSize: 9.5, lineHeight: 1.22, margin: [0, 0, 0, marginBottom] }),
++  ];
++}
++
++async function pdfMakeImageNodes(refs: ImageRef[]): Promise<PdfMakeNode[]> {
++  const nodes: PdfMakeNode[] = [];
++  for (const ref of refs) {
++    const loaded = await readImageBytes(ref);
++    const mime = loaded?.mimeType || mimeFromSource(ref.src, ref.mimeType);
++    if (loaded && (mime.includes("jpeg") || mime.includes("jpg") || mime.includes("png"))) {
++      const normalizedMime = mime.includes("png") ? "image/png" : "image/jpeg";
++      nodes.push({
++        image: `data:${normalizedMime};base64,${loaded.data.toString("base64")}`,
++        fit: [440, 280],
++        alignment: "center",
++        margin: [0, 5, 0, 3],
++      });
++      const caption = ref.caption ?? ref.alt;
++      if (caption) nodes.push(pdfMakeText(caption, { fontSize: 8, italics: true, alignment: "center", margin: [0, 0, 0, 4] }));
++    } else {
++      nodes.push(pdfMakeText(`[Gambar tidak dapat dimuat: ${imageDisplayName(ref)}]`, { fontSize: 8, italics: true, margin: [0, 2, 0, 3] }));
++    }
++  }
++  return nodes;
++}
++
++async function pdfMakeRichBlock(
++  label: string,
++  html: string | null | undefined,
++  assetLinks: ExportAssetLink[] = [],
++  options: PdfMakeNode = {},
++): Promise<PdfMakeNode[]> {
++  const nodes: PdfMakeNode[] = [];
++  const text = htmlToText(html);
++  const refs = mergeImageRefs(extractImageRefsFromHtml(html), assetImageRefs(assetLinks));
++
++  if (label && (text || refs.length)) {
++    nodes.push(pdfMakeText(label, { bold: true, fontSize: 9.5, margin: [0, 1, 0, 2] }));
++  }
++  if (text) {
++    nodes.push(pdfMakeText(text, {
++      fontSize: 10.5,
++      lineHeight: 1.3,
++      margin: [0, 0, 0, 3],
++      ...options,
++    }));
++  }
++  if (refs.length) nodes.push(...await pdfMakeImageNodes(refs));
++  return nodes;
++}
++
++async function pdfMakeOptionBlock(option: { label: string; contentHtml: string; assets: ExportAssetLink[] }): Promise<PdfMakeNode[]> {
++  const text = htmlToText(option.contentHtml);
++  const refs = mergeImageRefs(extractImageRefsFromHtml(option.contentHtml), assetImageRefs(option.assets));
++  const nodes: PdfMakeNode[] = [];
++
++  if (text) {
++    const arabic = containsArabic(text);
++    nodes.push({
++      columns: arabic
++        ? [
++            pdfMakeText(text, { width: "*", fontSize: 10.2, lineHeight: 1.28, alignment: "right", rtl: true }),
++            pdfMakeText(`${option.label}.`, { width: 25, bold: true, fontSize: 10.2, alignment: "right" }),
++          ]
++        : [
++            pdfMakeText(`${option.label}.`, { width: 25, bold: true, fontSize: 10.2 }),
++            pdfMakeText(text, { width: "*", fontSize: 10.2, lineHeight: 1.28 }),
++          ],
++      columnGap: 4,
++      margin: [0, 1, 0, refs.length ? 1 : 4],
++    });
++  } else if (refs.length) {
++    nodes.push(pdfMakeText(`${option.label}.`, { bold: true, fontSize: 10.2, margin: [0, 1, 0, 1] }));
++  }
++
++  if (refs.length) nodes.push(...await pdfMakeImageNodes(refs));
++  return nodes;
++}
++
++function createPdfMakeBuffer(pdfDoc: any): Promise<Buffer> {
++  return new Promise((resolve, reject) => {
++    const chunks: Buffer[] = [];
++    pdfDoc.on("data", (chunk: Buffer | Uint8Array) => chunks.push(Buffer.from(chunk)));
++    pdfDoc.on("end", () => resolve(Buffer.concat(chunks)));
++    pdfDoc.on("error", reject);
++    pdfDoc.end();
++  });
++}
++
++async function buildRtlPdf(params: ExportParams, questions: ExportQuestion[]) {
++  // pdfmake-rtl embeds Cairo for Arabic/Persian/Urdu and performs RTL/bidi processing.
++  // require() is intentional here because the package is CommonJS and runs only in the Node.js route runtime.
++  // eslint-disable-next-line @typescript-eslint/no-require-imports
++  const PdfPrinter = require("pdfmake-rtl");
++  // eslint-disable-next-line @typescript-eslint/no-require-imports
++  const RobotoFonts = require("pdfmake-rtl/fonts/Roboto");
++  // eslint-disable-next-line @typescript-eslint/no-require-imports
++  const CairoFonts = require("pdfmake-rtl/fonts/Cairo");
++  const printer = new PdfPrinter({ ...RobotoFonts, ...CairoFonts });
++
++  const content: PdfMakeNode[] = [
++    pdfMakeText("SOALFLOW - EXPORT SOAL", { fontSize: 16, bold: true, margin: [0, 0, 0, 3] }),
++    pdfMakeText("Dokumen bank soal yang dibuat otomatis oleh SoalFlow.", { fontSize: 9.5, margin: [0, 0, 0, 7] }),
++    { canvas: [{ type: "line", x1: 0, y1: 0, x2: 511, y2: 0, lineWidth: 0.7 }], margin: [0, 0, 0, 7] },
++    pdfMakeText(`Tanggal export: ${dateTime(new Date())}`, { fontSize: 9 }),
++    pdfMakeText(`Status validasi: ${validationLabels[params.validation]}`, { fontSize: 9 }),
++    pdfMakeText(`Mode export: ${selectionLabels[params.selection]}`, { fontSize: 9 }),
++  ];
++
++  const selectedBlueprintCodes = effectiveBlueprintCodesForSummary(params);
++  const allAuthors = Array.from(new Set(questions.flatMap(questionAuthorNames)));
++  const allValidators = Array.from(new Set(questions.flatMap(questionValidatorNames)));
++  content.push(
++    pdfMakeText(`Kisi-kisi dipilih: ${selectedBlueprintCodes.length ? selectedBlueprintCodes.join(", ") : "Semua kisi-kisi"}`, { fontSize: 9 }),
++    pdfMakeText(`Jumlah soal: ${questions.length}`, { fontSize: 9 }),
++    pdfMakeText(`Jumlah kisi-kisi: ${new Set(questions.map((question) => question.blueprint.code)).size}`, { fontSize: 9 }),
++    pdfMakeText(`Penulis soal: ${assigneeLabel(allAuthors)}`, { fontSize: 9 }),
++    pdfMakeText(`Validator soal: ${assigneeLabel(allValidators)}`, { fontSize: 9, margin: [0, 0, 0, 10] }),
++  );
++
++  if (!questions.length) {
++    content.push(pdfMakeText("Tidak ada soal yang sesuai dengan pengaturan export.", { fontSize: 11 }));
++  }
++
++  let previousBlueprintCode = "";
++  let previousStimulusKey = "";
++
++  for (const [index, question] of questions.entries()) {
++    const version = question.currentVersion;
++    const blueprintVersion = question.blueprint.currentVersion;
++    const stimulusVersion = question.stimulus?.currentVersion;
++    const options = (version?.options ?? []).slice().sort((left, right) => left.sortOrder - right.sortOrder);
++    const blueprintChanged = question.blueprint.code !== previousBlueprintCode;
++
++    if (blueprintChanged) {
++      content.push(
++        { canvas: [{ type: "line", x1: 0, y1: 0, x2: 511, y2: 0, lineWidth: 0.6 }], margin: [0, 5, 0, 6] },
++        pdfMakeText(`Kisi-kisi ${question.blueprint.code}`, { fontSize: 12, bold: true, margin: [0, 0, 0, 4] }),
++      );
++      previousBlueprintCode = question.blueprint.code;
++      previousStimulusKey = "";
++
++      if (params.includeBlueprint) {
++        content.push(...pdfMakeLabelValue("Judul", blueprintVersion?.titleHtml));
++        content.push(...pdfMakeLabelValue("Kelompok tes", blueprintVersion?.testGroupHtml));
++        content.push(...pdfMakeLabelValue("Topik", blueprintVersion?.testTopicHtml));
++        content.push(...pdfMakeLabelValue("Kompetensi", blueprintVersion?.competencyHtml));
++        content.push(...pdfMakeLabelValue("Indikator", blueprintVersion?.indicatorHtml));
++        if (blueprintVersion?.cognitiveLevel) content.push(pdfMakeText(`Level kognitif: ${blueprintVersion.cognitiveLevel}`, { fontSize: 9, margin: [0, 0, 0, 5] }));
++      }
++    }
++
++    const stimulusKey = stimulusVersion ? `${question.blueprint.code}:${question.stimulus?.code ?? stimulusVersion.titleHtml ?? "stimulus"}` : "";
++    const shouldRenderStimulus = Boolean(params.includeStimulus && stimulusVersion && stimulusKey !== previousStimulusKey);
++
++    if (shouldRenderStimulus && stimulusVersion) {
++      const stimulusTitle = htmlToText(stimulusVersion.titleHtml);
++      content.push({
++        stack: [
++          pdfMakeText(`STIMULUS ${question.stimulus?.code ?? "-"}${stimulusTitle ? ` - ${stimulusTitle}` : ""}`, {
++            fontSize: 10.5,
++            bold: true,
++            margin: [0, 0, 0, 4],
++          }),
++          ...await pdfMakeRichBlock("Instruksi", stimulusVersion.instructionsHtml),
++          ...await pdfMakeRichBlock("Teks/gambar stimulus", stimulusVersion.contentHtml, stimulusVersion.assets),
++          ...(stimulusVersion.source ? [pdfMakeText(`Sumber: ${stimulusVersion.source}`, { fontSize: 8, margin: [0, 2, 0, 0] })] : []),
++        ],
++        margin: [0, 4, 0, 8],
++      });
++      previousStimulusKey = stimulusKey;
++    }
++
++    const questionStack: PdfMakeNode[] = [
++      pdfMakeText(`${index + 1}. ${question.code}`, { fontSize: 11, bold: true, margin: [0, 1, 0, 2] }),
++      pdfMakeText(`Status: ${question.status}`, { fontSize: 8 }),
++      pdfMakeText(`Penulis soal: ${assigneeLabel(questionAuthorNames(question))}`, { fontSize: 8 }),
++      pdfMakeText(`Validator soal: ${assigneeLabel(questionValidatorNames(question))}`, { fontSize: 8 }),
++    ];
++    if (version?.orderInStimulus != null) questionStack.push(pdfMakeText(`Urutan dalam stimulus: ${version.orderInStimulus}`, { fontSize: 8 }));
++    questionStack.push(...await pdfMakeRichBlock("Soal", version?.stemHtml, version?.assets ?? [], { bold: true }));
++
++    for (const option of options) questionStack.push(...await pdfMakeOptionBlock(option));
++
++    if (params.includeAnswer) {
++      questionStack.push(pdfMakeText(`Kunci jawaban: ${version?.answerKey ?? "-"}`, { fontSize: 10, bold: true, margin: [0, 3, 0, 2] }));
++    }
++    if (params.includeExplanation && version?.explanationHtml) {
++      questionStack.push(pdfMakeText("PEMBAHASAN", { fontSize: 9.5, bold: true, margin: [0, 3, 0, 2] }));
++      questionStack.push(...await pdfMakeRichBlock("", version.explanationHtml));
++    }
++
++    content.push({ stack: questionStack, margin: [0, 0, 0, 9] });
++  }
++
++  const docDefinition: PdfMakeNode = {
++    pageSize: "A4",
++    pageMargins: [42, 46, 42, 42],
++    content,
++    defaultStyle: {
++      font: "Roboto",
++      fontSize: 10,
++      lineHeight: 1.2,
++    },
++    header: () => pdfMakeText("SoalFlow - Export Soal", { fontSize: 7.5, alignment: "right", margin: [42, 20, 42, 0] }),
++    footer: (currentPage: number, pageCount: number) => pdfMakeText(`Halaman ${currentPage} dari ${pageCount}`, { fontSize: 7.5, alignment: "center", margin: [42, 0, 42, 16] }),
++    info: {
++      title: "SoalFlow - Export Soal",
++      author: "SoalFlow",
++      subject: "Export bank soal",
++    },
++  };
++
++  const pdfDoc = printer.createPdfKitDocument(docDefinition);
++  return createPdfMakeBuffer(pdfDoc);
++}
++
++
++function exportPdfNeedsRtl(params: ExportParams, questions: ExportQuestion[]) {
++  return questions.some((question) => {
++    const version = question.currentVersion;
++    const blueprint = question.blueprint.currentVersion;
++    const stimulus = question.stimulus?.currentVersion;
++    const texts: Array<string | null | undefined> = [
++      version?.stemHtml,
++      ...(version?.options ?? []).map((option) => option.contentHtml),
++      params.includeExplanation ? version?.explanationHtml : null,
++      params.includeBlueprint ? blueprint?.titleHtml : null,
++      params.includeBlueprint ? blueprint?.testGroupHtml : null,
++      params.includeBlueprint ? blueprint?.testTopicHtml : null,
++      params.includeBlueprint ? blueprint?.competencyHtml : null,
++      params.includeBlueprint ? blueprint?.indicatorHtml : null,
++      params.includeStimulus ? stimulus?.titleHtml : null,
++      params.includeStimulus ? stimulus?.instructionsHtml : null,
++      params.includeStimulus ? stimulus?.contentHtml : null,
++    ];
++    return texts.some((text) => containsArabic(htmlToText(text)));
++  });
++}
++
++async function buildPdf(params: ExportParams, questions: ExportQuestion[]) {
++  // Preserve the existing renderer for Latin-only exports so this patch only changes
++  // PDF behavior when Arabic-script content is actually present.
++  if (!exportPdfNeedsRtl(params, questions)) return buildLegacyPdf(params, questions);
++  return buildRtlPdf(params, questions);
++}
++
+ export async function GET(request: Request) {
+   const user = await getCurrentUser();
+   if (!user) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+--- a/apps/admin/package.json
++++ b/apps/admin/package.json
+@@ -18,7 +18,8 @@
+     "react": "^19.0.0",
+     "react-dom": "^19.0.0",
+     "@seleksi/database": "*",
+-    "xlsx": "^0.18.5"
++    "xlsx": "^0.18.5",
++    "pdfmake-rtl": "^2.1.2"
+   },
+   "devDependencies": {
+     "@types/node": "^22.0.0",
+--- a/apps/admin/next.config.mjs
++++ b/apps/admin/next.config.mjs
+@@ -1,3 +1,8 @@
++import path from "node:path";
++import { fileURLToPath } from "node:url";
++
++const __dirname = path.dirname(fileURLToPath(import.meta.url));
++
+ /** @type {import('next').NextConfig} */
+ const nextConfig = {
+   transpilePackages: [
+@@ -6,7 +11,14 @@
+     "@seleksi/validation",
+     "@seleksi/database"
+   ],
+-  serverExternalPackages: ["@prisma/client", "prisma", "xlsx"],
++  serverExternalPackages: ["@prisma/client", "prisma", "xlsx", "pdfmake-rtl"],
++  outputFileTracingRoot: path.join(__dirname, "../.."),
++  outputFileTracingIncludes: {
++    "/api/question-exports": [
++      "./node_modules/pdfmake-rtl/fonts/**/*",
++      "../../node_modules/pdfmake-rtl/fonts/**/*"
++    ]
++  },
+   experimental: { serverActions: { bodySizeLimit: "8mb" } },
+   reactStrictMode: true
+ };
