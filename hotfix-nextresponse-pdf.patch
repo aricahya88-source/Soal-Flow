@@ -1,0 +1,17 @@
+--- a/apps/admin/app/api/question-exports/route.ts
++++ b/apps/admin/app/api/question-exports/route.ts
+@@ -2090,7 +2090,13 @@
+ 
+   if (params.format === "pdf") {
+     const buffer = await buildPdf(params, questions);
+-    return new NextResponse(buffer, {
++    // NextResponse uses the Web Fetch BodyInit type. Node.js Buffer is a Uint8Array,
++    // but its generic backing type is ArrayBufferLike in newer Node typings, which
++    // is not assignable to BodyInit in Next.js 15. Copy it into a web-compatible
++    // Uint8Array backed by a plain ArrayBuffer before returning the PDF.
++    const body = new Uint8Array(buffer.byteLength);
++    body.set(buffer);
++    return new NextResponse(body, {
+       status: 200,
+       headers: {
+         "Content-Type": "application/pdf",
