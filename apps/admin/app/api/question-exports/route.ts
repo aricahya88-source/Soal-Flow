@@ -1855,26 +1855,17 @@ async function pdfMakeOptionBlock(option: { label: string; contentHtml: string; 
   return nodes;
 }
 
-function createPdfMakeBuffer(pdfDoc: any): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    pdfDoc.on("data", (chunk: Buffer | Uint8Array) => chunks.push(Buffer.from(chunk)));
-    pdfDoc.on("end", () => resolve(Buffer.concat(chunks)));
-    pdfDoc.on("error", reject);
-    pdfDoc.end();
-  });
-}
-
 async function buildRtlPdf(params: ExportParams, questions: ExportQuestion[]) {
-  // pdfmake-rtl embeds Cairo for Arabic/Persian/Urdu and performs RTL/bidi processing.
-  // require() is intentional here because the package is CommonJS and runs only in the Node.js route runtime.
+  // pdfmake-rtl@2.x exposes a singleton pdfmake instance on Node (not a constructor).
+  // Register the bundled Roboto/Cairo descriptors, create the document, then read its Buffer.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const PdfPrinter = require("pdfmake-rtl");
+  const pdfmake = require("pdfmake-rtl");
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const RobotoFonts = require("pdfmake-rtl/fonts/Roboto");
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const CairoFonts = require("pdfmake-rtl/fonts/Cairo");
-  const printer = new PdfPrinter({ ...RobotoFonts, ...CairoFonts });
+  pdfmake.addFonts(RobotoFonts);
+  pdfmake.addFonts(CairoFonts);
 
   const content: PdfMakeNode[] = [
     pdfMakeText("SOALFLOW - EXPORT SOAL", { fontSize: 16, bold: true, margin: [0, 0, 0, 3] }),
@@ -1989,8 +1980,9 @@ async function buildRtlPdf(params: ExportParams, questions: ExportQuestion[]) {
     },
   };
 
-  const pdfDoc = printer.createPdfKitDocument(docDefinition);
-  return createPdfMakeBuffer(pdfDoc);
+  const pdfDocument = pdfmake.createPdf(docDefinition);
+  const buffer = await pdfDocument.getBuffer();
+  return Buffer.from(buffer);
 }
 
 
